@@ -2,7 +2,7 @@ services:
   - type: web
     name: cn-workforce
     runtime: docker
-    plan: starter
+    plan: free
     region: singapore
     healthCheckPath: /healthz
     envVars:
@@ -22,11 +22,11 @@ services:
         sync: false
       - key: CN_DRIVE_CREDENTIALS_JSON
         sync: false
+      - key: CN_BACKUP_FILE_ID
+        sync: false
+      - key: CN_BACKUP_INTERVAL
+        value: "60"
       - key: CN_MASTER_URL
         sync: false
       - key: CN_MASTER_IMAGES_URL
         sync: false
-    disk:
-      name: cn-data
-      mountPath: /data
-      sizeGB: 1

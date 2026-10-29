@@ -2,16 +2,19 @@ import hmac
 import json
 import os
 import re
+import signal
 import socket
 import stat
 import sys
 import tempfile
+import threading
 import time
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
+import backup
 from auth import (SESSION_COOKIE, SESSION_TTL, auth_required, issue_session, parse_cookies,
                   valid_session, verify_code)
 from drive import Drive, DriveError
@@ -81,6 +84,7 @@ class DemoServer(ThreadingHTTPServer):
         self.static_root = Path(static_root).absolute()
         self.drive = None
         self.drive_ready = False
+        self.backup = None
         self.remote = host not in ("127.0.0.1", "localhost", "::1")
         self.auth_required = auth_required()
         self.public_url = os.environ.get("CN_PUBLIC_URL", "").rstrip("/")
@@ -497,6 +501,8 @@ def create_server(port=None, data_dir=None, static_root=None, host=None):
     if host not in ("127.0.0.1", "localhost", "::1") and not auth_required():
         raise ValueError("CN_ACCESS_CODE is required when CN_HOST binds beyond loopback")
     data_dir = data_dir if data_dir is not None else os.environ.get("CN_DATA_DIR", str(BASE_DIR / ".local"))
+    data_path = Path(data_dir).expanduser().resolve()
+    data_path.mkdir(parents=True, exist_ok=True)
     static_root = static_root if static_root is not None else BASE_DIR / "static"
     seed_setting = os.environ.get("CN_SEED_DEMO")
     if seed_setting is None:
@@ -504,7 +510,22 @@ def create_server(port=None, data_dir=None, static_root=None, host=None):
         seed = not os.environ.get("CN_SYNC_TOKEN", "").strip()
     else:
         seed = seed_setting.strip().lower() not in ("0", "false", "no")
-    return DemoServer(port, Store(data_dir, seed=seed), static_root, host=host)
+    backup_id = backup.backup_file_id()
+    drive = Drive.from_env(data_path / "image-cache") if backup_id else None
+    if drive is not None:
+        # Free hosting wipes the disk on restart: reload the last copy before opening the store.
+        try:
+            if backup.restore(data_path, drive, backup_id):
+                print("[backup] đã khôi phục cơ sở dữ liệu từ Google Drive", flush=True)
+        except DriveError as error:
+            print(f"[backup] chưa khôi phục được: {error}", flush=True)
+    server = DemoServer(port, Store(data_path, seed=seed), static_root, host=host)
+    if drive is not None:
+        server.drive = drive
+        server.drive_ready = True
+        server.backup = backup.DriveBackup(
+            server.store.db_path, drive, backup_id, interval=backup.backup_interval())
+    return server
 
 
 def main():
@@ -512,11 +533,20 @@ def main():
     scheme = "https" if server.secure_cookie else "http"
     address = server.public_url or f"{scheme}://127.0.0.1:{server.server_port}"
     print(f"CN Workforce: {address} ({'có' if server.auth_required else 'không'} mã truy cập công ty)", flush=True)
+    if server.backup is not None:
+        server.backup.start()
+
+    def request_shutdown(*_):
+        threading.Thread(target=server.shutdown, daemon=True).start()
+
+    signal.signal(signal.SIGTERM, request_shutdown)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
+        if server.backup is not None:
+            server.backup.stop()
         server.server_close()
 
 

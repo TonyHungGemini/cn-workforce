@@ -9,7 +9,7 @@ Mục tiêu: sếp và nhân viên mở **một đường link HTTPS** là xem �
 - Không có link công khai ẩn danh: 567 hồ sơ thật, số CMND và chân dung không được đặt sau một URL ai cũng mở được.
 - GitHub Pages **không** dùng để chạy app này vì là máy chủ tĩnh, không bảo vệ được dữ liệu.
 
-## 2. Chuẩn bị Google Drive (chỉ đọc)
+## 2. Chuẩn bị Google Drive
 
 1. Vào Google Cloud Console, tạo project, bật **Google Drive API**.
 2. Tạo **Service Account**, vào *Keys* → *Add key* → *JSON*. Tải tệp về máy, **không** đưa lên GitHub.
@@ -19,22 +19,33 @@ Mục tiêu: sếp và nhân viên mở **một đường link HTTPS** là xem �
 6. Trên Render, thêm biến `CN_DRIVE_CREDENTIALS_JSON`, dán **toàn bộ nội dung** tệp JSON ở bước 2 (giữ nguyên các ký tự `\n` trong `private_key`, không thêm dấu nháy bao ngoài). `render.yaml` đã khai báo biến này ở chế độ nhập tay.
 7. Kiểm tra khoá trước khi dùng: `python3 scripts/check_drive.py` — in `OK` kèm số byte là đọc được ảnh.
 
-Không dùng khoá admin/tài khoản cá nhân. Service account chỉ có quyền đọc đúng thư mục được chia sẻ.
+### Tệp sao lưu cơ sở dữ liệu (bắt buộc với gói Free)
+
+Gói Free không có ổ đĩa bền, nên database được sao lưu vào một tệp Drive do **bạn** sở hữu:
+
+1. Tạo thư mục `CN_Workforce_Backup` trong Drive, tải lên một tệp rỗng tên `cn-workforce.sqlite3`.
+2. Chia sẻ **chỉ tệp đó** cho email service account với quyền **Editor**.
+3. Mở tệp, lấy mã trong URL `https://drive.google.com/file/d/<MÃ_TỆP>/view` và nhập vào `CN_BACKUP_FILE_ID` trên Render.
+
+Service account không có dung lượng lưu trữ riêng, nên tệp phải do bạn tạo trước; app chỉ ghi đè nội dung tệp đó (mỗi 60 giây khi có thay đổi, và khi dịch vụ tắt). Khi máy chủ khởi động lại với ổ đĩa trống, app tự tải bản sao lưu mới nhất trước khi mở dữ liệu.
+
+Không dùng khoá admin/tài khoản cá nhân. Thư mục ảnh vẫn chỉ cấp **Viewer**; quyền **Editor** chỉ áp cho tệp sao lưu.
 
 ## 3. Triển khai trên Render
 
 1. Đẩy mã nguồn lên repo GitHub mới **sau khi được duyệt** (không đè repo cũ).
 2. Render → *New* → *Blueprint* → chọn repo. Render đọc `render.yaml` và tạo:
-   - Web service Docker, vùng Singapore, health check `/healthz`.
-   - Ổ đĩa bền 1 GB gắn tại `/data` (SQLite nằm ở `/data/demo.sqlite3`).
+   - Web service Docker, gói **Free**, vùng Singapore, health check `/healthz`.
+   - Không có ổ đĩa bền: SQLite nằm ở `/data/demo.sqlite3` trong container và được sao lưu lên Drive.
 3. Nhập các biến bí mật trong Dashboard:
    - `CN_ACCESS_CODE`: mã công ty, tối thiểu 16 ký tự ngẫu nhiên.
    - `CN_SYNC_TOKEN`: token riêng để đẩy dữ liệu ban đầu, tối thiểu 32 ký tự.
    - `CN_PUBLIC_URL`: URL Render cấp, ví dụ `https://cn-workforce.onrender.com`.
    - `CN_SECRET_KEY`: Render tự sinh.
+   - `CN_BACKUP_FILE_ID`: mã tệp `cn-workforce.sqlite3` đã chia sẻ cho service account.
    - `CN_SEED_DEMO=0`: **bắt buộc** để máy chủ không tạo 48 hồ sơ minh họa trước khi nhận dữ liệu thật. Khi có `CN_SYNC_TOKEN`, app cũng tự tắt seed nếu biến này chưa đặt.
 4. Deploy. Mở `https://<tên-app>.onrender.com/healthz` phải trả `{"ok":true,...}`.
-5. Gói **Starter** trở lên mới có ổ đĩa bền; gói free sẽ mất SQLite sau khi ngủ/khởi động lại.
+5. Gói Free ngủ sau khoảng 15 phút không có truy cập; lần mở đầu tiên chậm khoảng 30–60 giây. Dữ liệu vẫn còn vì app khôi phục từ tệp sao lưu trên Drive khi khởi động.
 
 ## 4. Đưa dữ liệu thật lần đầu lên máy chủ
 
@@ -90,7 +101,8 @@ Quy tắc đồng bộ: ĐSX02 thắng ở các trường hồ sơ; hồ sơ m�
 - Host/Origin được giới hạn theo `CN_PUBLIC_URL`; API từ chối cross-site.
 - Đăng nhập sai quá 8 lần/10 phút sẽ bị chặn tạm.
 - Không ghi mã truy cập, token, tệp service account vào chat, ảnh chụp hay Git.
-- Sao lưu định kỳ `/data/demo.sqlite3` và `/data/image-cache/` (Render disk snapshot hoặc tải bản sao).
+- Dữ liệu tự sao lưu lên tệp `cn-workforce.sqlite3` trên Drive mỗi ~60 giây khi có thay đổi và khi dịch vụ tắt; muốn bản sao ngoài Drive thì tải tệp đó về máy.
+- `image-cache/` chỉ là bộ nhớ đệm ảnh, mất khi khởi động lại và tự tải lại từ Drive — không cần sao lưu.
 - Khi nhân viên nghỉ việc: đổi `CN_ACCESS_CODE` để vô hiệu phiên cũ.
 - Ảnh giấy tờ là dữ liệu nhạy cảm: chỉ chia sẻ thư mục Drive cho đúng service account; kiểm tra lại quyền mỗi quý.
 

@@ -12,8 +12,11 @@ from pathlib import Path
 FILE_ID = re.compile(r"[A-Za-z0-9_-]{10,100}")
 TOKEN_URL = "https://oauth2.googleapis.com/token"
 DRIVE_URL = "https://www.googleapis.com/drive/v3/files/{file_id}?alt=media&supportsAllDrives=true"
-SCOPE = "https://www.googleapis.com/auth/drive.readonly"
+UPLOAD_URL = "https://www.googleapis.com/upload/drive/v3/files/{file_id}"
+# Bản sao lưu SQLite ghi vào tệp do chủ thư mục sở hữu (service account không có dung lượng riêng).
+SCOPE = "https://www.googleapis.com/auth/drive"
 MAX_BYTES = 10 * 1024 * 1024
+BACKUP_MAX_BYTES = 64 * 1024 * 1024
 CACHE_TTL = 7 * 24 * 3600
 
 
@@ -125,6 +128,54 @@ class Drive:
                 raise DriveError("Ảnh vượt quá 10 MB.")
             content_type = (response.headers.get("Content-Type") or "application/octet-stream").split(";")[0]
             return body, content_type
+
+    @staticmethod
+    def _status_error(status):
+        if status in (401, 403):
+            return "Service account không có quyền trên tệp Drive này."
+        if status == 404:
+            return "Không tìm thấy tệp trên Google Drive."
+        return "Google Drive trả về lỗi."
+
+    def download(self, file_id, limit=BACKUP_MAX_BYTES):
+        """Tải nguyên nội dung tệp (dùng cho bản sao lưu cơ sở dữ liệu)."""
+        if not FILE_ID.fullmatch(file_id or ""):
+            raise DriveError("Mã tệp Drive không hợp lệ.")
+        self._access_token()
+        request = urllib.request.Request(
+            DRIVE_URL.format(file_id=urllib.parse.quote(file_id)), method="GET",
+            headers={"Authorization": f"Bearer {self._token}"})
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout) as response:
+                body = response.read(limit + 1)
+        except urllib.error.HTTPError as error:
+            raise DriveError(self._status_error(error.code)) from error
+        except (urllib.error.URLError, OSError) as error:
+            raise DriveError("Không tải được tệp từ Google Drive.") from error
+        if len(body) > limit:
+            raise DriveError("Tệp sao lưu vượt quá dung lượng cho phép.")
+        return body
+
+    def update(self, file_id, body, content_type="application/octet-stream"):
+        """Ghi đè nội dung một tệp đã tồn tại do chủ thư mục sở hữu."""
+        if not FILE_ID.fullmatch(file_id or ""):
+            raise DriveError("Mã tệp Drive không hợp lệ.")
+        self._access_token()
+        url = (UPLOAD_URL.format(file_id=urllib.parse.quote(file_id))
+               + "?uploadType=media&supportsAllDrives=true")
+        request = urllib.request.Request(
+            url, data=body, method="PATCH",
+            headers={"Authorization": f"Bearer {self._token}", "Content-Type": content_type})
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout * 3) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as error:
+            raise DriveError(self._status_error(error.code)) from error
+        except (urllib.error.URLError, OSError) as error:
+            raise DriveError("Không ghi được bản sao lưu lên Google Drive.") from error
+        except (ValueError, TypeError) as error:
+            raise DriveError("Google Drive trả về dữ liệu không hợp lệ.") from error
+        return payload
 
     def fetch(self, file_id):
         if not FILE_ID.fullmatch(file_id or ""):
