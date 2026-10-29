@@ -1,0 +1,16 @@
+{
+  "name": "cn-workforce-local-demo",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Local-only browser OCR assets for the workforce demo",
+  "scripts": {
+    "setup:ocr": "node scripts/setup-ocr.cjs",
+    "test:ocr": "node --test tests/test_ocr.cjs"
+  },
+  "dependencies": {
+    "@tesseract.js-data/eng": "1.0.0",
+    "@tesseract.js-data/khm": "1.0.0",
+    "@tesseract.js-data/vie": "1.0.0",
+    "tesseract.js": "7.0.0"
+  }
+}

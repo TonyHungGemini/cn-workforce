@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#123c32">
+  <meta name="description" content="Phân hệ Công nhân & An ninh toàn công ty trong PM Quản trị hợp nhất — bản demo kế thừa ĐSX02.">
+  <title>Tra cứu công nhân · CN Workforce</title>
+  <link rel="icon" href="assets/mark.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="styles.css">
+  <script src="ocr.js" defer></script>
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Đến nội dung chính</a>
+  <aside id="sidebar" class="sidebar" aria-label="Điều hướng phân hệ">
+    <div class="parent-brand">PM QUẢN TRỊ HỢP NHẤT<small>Mô phỏng khung App mẹ</small></div>
+    <a class="brand" href="#workers"><img src="assets/mark.svg" width="40" height="40" alt=""><span>CN <b>Workforce</b><small>CÔNG NHÂN & AN NINH</small></span></a>
+    <div class="workspace-tag"><span class="workspace-logo">C2</span><span>C.R.C.K.2 Aphivath<small>Phạm vi toàn công ty</small></span></div>
+    <p class="nav-label">MENU · CÔNG NHÂN & AN NINH</p>
+    <nav id="primary-nav"></nav>
+    <div class="sidebar-bottom"><div class="connection-note"><span class="status-dot amber"></span><span>Thiết kế tích hợp<small>Chưa liên thông với App mẹ</small></span><a href="#integration" aria-label="Xem thiết kế tích hợp App mẹ">↗</a></div><div class="user-chip"><span class="avatar user-avatar">QT</span><span>Quản trị demo<small>Phiên cục bộ · chưa phân quyền</small></span></div></div>
+  </aside>
+  <div class="app-shell">
+    <header class="topbar">
+      <button id="menu-toggle" class="icon-button mobile-only" aria-label="Mở điều hướng" aria-expanded="false"></button>
+      <div class="breadcrumb">Công nhân & An ninh <span>/</span> <strong id="breadcrumb">Tra cứu công nhân</strong></div>
+      <div class="topbar-actions"><label class="unit-picker"><span id="unit-icon"></span><select id="unit-select" aria-label="Chọn đơn vị"><option value="all">Toàn công ty</option></select></label><button class="icon-button" id="notification-button" aria-label="Xem việc cần chú ý"></button><span class="topbar-divider"></span><span class="avatar mini-avatar">QT</span></div>
+    </header>
+    <main id="main" tabindex="-1"><div class="loading-state"><span class="loader"></span>Đang mở danh sách công nhân…</div></main>
+    <footer class="app-footer"><span>CN Workforce <b>v0.2</b> · Toàn công ty · Kế thừa ĐSX02</span><span><i class="status-dot amber"></i>Demo chờ duyệt · Chưa tải lên GitHub</span></footer>
+  </div>
+  <dialog id="dialog" aria-labelledby="dialog-title"></dialog>
+  <div id="toast" role="status" aria-live="polite"></div>
+</body>
+</html>
