@@ -408,6 +408,10 @@ class Handler(BaseHTTPRequestHandler):
             raise APIError(502, str(error)) from error
         return self._json(200, self._sync_summary(report))
 
+    def _admin_transfer_decision(self):
+        self._require_sync_token()
+        return self._json(200, self.server.store.decide_transfer(self._body(require_origin=False)))
+
     @staticmethod
     def _sync_summary(report):
         return {
@@ -428,6 +432,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._admin_sync()
             if path == "/api/v1/admin/pull":
                 return self._admin_pull()
+            if path == "/api/v1/transfers/decision":
+                return self._admin_transfer_decision()
             if path == "/api/v1/session":
                 return self._session()
             authenticated = self._authenticated()
@@ -445,6 +451,7 @@ class Handler(BaseHTTPRequestHandler):
             writes = {
                 "/api/v1/workers": self.server.store.save_worker,
                 "/api/v1/workers/archive": self.server.store.archive_worker,
+                "/api/v1/transfers": self.server.store.request_transfer,
                 "/api/v1/events": self.server.store.add_event,
                 "/api/v1/visitors": self.server.store.add_visitor,
                 "/api/v1/visitors/transition": self.server.store.transition_visitor,

@@ -156,6 +156,11 @@ function isInside(id) {
   return event?.direction === 'in';
 }
 function occupancy(room) { return state.data.workers.filter(w => w.status === 'active' && w.phong_o === room.id && w.unit_id === room.unit_id).length; }
+const transfers = () => state.data?.transfers || [];
+const pendingTransfer = id => transfers().find(t => t.worker_id === id && t.status === 'pending');
+const inTransferScope = t => state.unit === 'all' || t.from_unit === state.unit || t.to_unit === state.unit;
+const transferStatus = {pending:['Chờ chấp nhận','amber'],approved:['Đã chấp nhận',''],rejected:['Từ chối','gray']};
+function transferBadge(status) { const [label,color]=transferStatus[status]||['Chưa rõ','gray']; return badge(label,color); }
 function metric(title,value,suffix,foot,ico) { return `<article class="metric"><div class="metric-title">${title}<span class="metric-icon">${icon(ico)}</span></div><strong class="metric-value">${value}<small>${suffix}</small></strong><div class="metric-foot">${foot}</div></article>`; }
 function metrics() {
   const list=activeWorkers(), rooms=scoped(state.data.rooms), employed=list.filter(w=>w.loai==='Lao động').length, family=list.filter(w=>w.loai==='Gia thuộc').length;
@@ -175,7 +180,7 @@ function attention() {
 }
 function workerTable(list,compact=false) {
   if(!list.length) return empty('Chưa tìm thấy hồ sơ','Thử một tên khác hoặc bỏ bớt bộ lọc.');
-  return `<div class="table-wrap"><table><thead><tr><th>HỒ SƠ CÔNG NHÂN</th><th>PHÂN LOẠI</th><th>TỔ / ĐƠN VỊ</th><th>PHÒNG Ở</th><th>TRẠNG THÁI HỒ SƠ</th>${compact?'':'<th><span class="visually-hidden">Thao tác</span></th>'}</tr></thead><tbody>${list.map(w=>`<tr><td>${personCell(w)}</td><td>${typeBadge(w.loai)}</td><td>${esc(w.to)}<br><span class="filter-meta">${esc(w.unit_id)}</span></td><td>${esc(w.phong_o || 'Chưa bố trí')}</td><td>${profileStatus(w)}</td>${compact?'':`<td><button class="icon-button" data-action="detail" data-id="${esc(w.id)}" aria-label="Xem ${esc(w.ten_that)}">${icon('chevron')}</button></td>`}</tr>`).join('')}</tbody></table></div>`;
+  return `<div class="table-wrap"><table><thead><tr><th>HỒ SƠ CÔNG NHÂN</th><th>PHÂN LOẠI</th><th>TỔ / ĐƠN VỊ</th><th>PHÒNG Ở</th><th>TRẠNG THÁI HỒ SƠ</th>${compact?'':'<th><span class="visually-hidden">Thao tác</span></th>'}</tr></thead><tbody>${list.map(w=>`<tr><td>${personCell(w)}</td><td>${typeBadge(w.loai)}</td><td>${esc(w.to)}<br><span class="filter-meta">${esc(w.unit_id)}</span></td><td>${esc(w.phong_o || 'Chưa bố trí')}${pendingTransfer(w.id)?`<br>${badge('Chờ nhận phòng','amber')}`:''}</td><td>${profileStatus(w)}</td>${compact?'':`<td><button class="icon-button" data-action="detail" data-id="${esc(w.id)}" aria-label="Xem ${esc(w.ten_that)}">${icon('chevron')}</button></td>`}</tr>`).join('')}</tbody></table></div>`;
 }
 function overview() {
   const date = new Intl.DateTimeFormat('vi-VN',{weekday:'long',day:'numeric',month:'long',year:'numeric'}).format(new Date());
@@ -195,8 +200,8 @@ function ratingText(w,field) {
 function workerList(list) {
   if (!list.length) return empty('Chưa tìm thấy hồ sơ','Thử tên không dấu, số giấy tờ hoặc bỏ bớt bộ lọc.');
   return `<ul class="worker-list">${list.map(w=>`<li class="worker-row">
-    <div class="worker-identity">${avatarMarkup(w)}<div><button class="person-link" data-action="detail" data-id="${esc(w.id)}"><b>${esc(w.ten_that)}</b></button><small>${esc(w.person_id)} · ${esc(w.unit_id)}</small>${isBorrowedName(w)?`<small>Tên hồ sơ: ${esc(w.ten_ho_so)}</small>`:''}<div class="worker-tags">${typeBadge(w.loai)}${w.chu_phong?badge('Chủ phòng','blue'):''}${!w.cmnd?badge('Thiếu CMND','amber'):''}${w.status==='archived'?badge('Đã lưu trữ','gray'):''}</div></div></div>
-    <div class="worker-location"><b>${esc(units[w.unit_id]||w.unit_id)}</b><small>${esc(w.to)} · ${w.phong_o?`Phòng ${esc(w.phong_o)}`:'Chưa bố trí phòng'}</small><small>${w.phan_cay?`Phần cây ${esc(w.phan_cay)}`:w.khu_vuc?esc(w.khu_vuc):'Chưa cập nhật khu vực'}</small></div>
+    <div class="worker-identity">${avatarMarkup(w)}<div><button class="person-link" data-action="detail" data-id="${esc(w.id)}"><b>${esc(w.ten_that)}</b></button><small>${esc(w.person_id)} · ${esc(w.unit_id)}</small>${isBorrowedName(w)?`<small>Tên hồ sơ: ${esc(w.ten_ho_so)}</small>`:''}<div class="worker-tags">${typeBadge(w.loai)}${w.chu_phong?badge('Chủ phòng','blue'):''}${pendingTransfer(w.id)?badge('Chờ nhận phòng','amber'):''}${!w.cmnd?badge('Thiếu CMND','amber'):''}${w.status==='archived'?badge('Đã lưu trữ','gray'):''}</div></div></div>
+    <div class="worker-location"><b>${esc(units[w.unit_id]||w.unit_id)}</b><small>${esc(w.to)} · ${pendingTransfer(w.id)?`Chờ nhận phòng ${esc(pendingTransfer(w.id).to_room)}`:(w.phong_o?`Phòng ${esc(w.phong_o)}`:'Chưa bố trí phòng')}</small><small>${w.phan_cay?`Phần cây ${esc(w.phan_cay)}`:w.khu_vuc?esc(w.khu_vuc):'Chưa cập nhật khu vực'}</small></div>
     <div class="worker-contact"><b>${esc(w.so_dt||'Chưa có điện thoại')}</b><small>Nhóm máu: ${esc(w.nhom_mau||'Chưa xác định')}</small></div>
     <div class="worker-ratings"><small>Kỹ năng <b>${ratingText(w,'danh_gia_ky_nang')}</b></small><small>Kỷ luật <b>${ratingText(w,'danh_gia_dao_duc')}</b></small>${needsReview(w)?badge('Có mục theo dõi','amber'):''}</div>
     <button class="icon-button worker-open" data-action="detail" data-id="${esc(w.id)}" aria-label="Xem ${esc(w.ten_that)}">${icon('chevron')}</button>
@@ -231,10 +236,19 @@ function discipline() {
 }
 function rooms() {
   const rooms=scoped(state.data.rooms);
-  return heading('Cư trú & Gia thuộc','Quản lý phòng ở, nhân khẩu và sức chứa theo từng đơn vị.',button('Xuất cư trú','export-rooms','download','secondary'),'KHÔNG GIAN SỐNG')+
+  return heading('Cư trú & Gia thuộc','Quản lý phòng ở, nhân khẩu và sức chứa theo từng đơn vị.',button('Xuất cư trú','export-rooms','download','secondary')+button('Chuyển phòng ở','new-transfer','home','primary'),'KHÔNG GIAN SỐNG')+
   `<div class="metrics">${metric('Phòng đang có người',rooms.filter(r=>occupancy(r)>0).length,`/ ${rooms.length}`,'Theo hồ sơ đang hoạt động','home')}${metric('Tổng người cư trú',activeWorkers().filter(w=>w.phong_o).length,'người','Bao gồm lao động & gia thuộc','people')}${metric('Phòng vượt sức chứa',rooms.filter(r=>occupancy(r)>r.capacity).length,'phòng','Cần kiểm tra và điều chỉnh','warning')}${metric('Chưa bố trí phòng',activeWorkers().filter(w=>!w.phong_o).length,'người','Theo trường thông tin phòng ở','file')}</div>`+
   notice(isImported()?'Sức chứa được suy ra từ dữ liệu nhập (tối thiểu 6 chỗ/phòng), không phải sức chứa thực tế. Số người cùng phòng không tự động đồng nghĩa với quan hệ gia đình.':'Sức chứa trong demo là cấu hình minh họa. Số người cùng phòng không tự động đồng nghĩa với quan hệ gia đình.',true)+
-  `<section class="panel"><div class="panel-heading"><div><h2>Sơ đồ phòng ở</h2><p>Chọn một phòng để xem danh sách cư trú</p></div>${badge(`${rooms.length} phòng`,'gray')}</div><div class="room-grid">${rooms.map(r=>{const n=occupancy(r), over=n>r.capacity;return `<button class="room-card ${over?'over':''}" data-action="room-detail" data-id="${esc(r.id)}"><div class="room-card-head"><h3>${esc(r.id)}</h3>${icon('home')}</div><p>${esc(units[r.unit_id])}</p>${badge(over?'Vượt sức chứa':n===0?'Phòng trống':'Đang sử dụng',over?'amber':n===0?'gray':'')}<div class="occupancy-bar"><span style="width:${Math.min(100,n/r.capacity*100)}%"></span></div><small>${n} người / ${r.capacity} chỗ · Xem hồ sơ →</small></button>`;}).join('')}</div></section>`;
+  `<section class="panel"><div class="panel-heading"><div><h2>Sơ đồ phòng ở</h2><p>Chọn một phòng để xem danh sách cư trú</p></div>${badge(`${rooms.length} phòng`,'gray')}</div><div class="room-grid">${rooms.map(r=>{const n=occupancy(r), over=n>r.capacity;return `<button class="room-card ${over?'over':''}" data-action="room-detail" data-id="${esc(r.id)}"><div class="room-card-head"><h3>${esc(r.id)}</h3>${icon('home')}</div><p>${esc(units[r.unit_id])}</p>${badge(over?'Vượt sức chứa':n===0?'Phòng trống':'Đang sử dụng',over?'amber':n===0?'gray':'')}<div class="occupancy-bar"><span style="width:${Math.min(100,n/r.capacity*100)}%"></span></div><small>${n} người / ${r.capacity} chỗ · Xem hồ sơ →</small></button>`;}).join('')}</div></section>`+
+  transferPanel();
+}
+function transferPanel() {
+  const pending=transfers().filter(t=>t.status==='pending'&&inTransferScope(t));
+  const decided=transfers().filter(t=>t.status!=='pending'&&inTransferScope(t)).slice(0,5);
+  const name=id=>state.data.workers.find(w=>w.id===id)?.ten_that||'Hồ sơ ngoài danh sách';
+  const head='<thead><tr><th>HỒ SƠ</th><th>TỪ PHÒNG</th><th>PHÒNG ĐÍCH</th><th>GHI CHÚ</th><th>THỜI ĐIỂM</th><th>TRẠNG THÁI</th></tr></thead>';
+  const row=t=>`<tr><td>${esc(name(t.worker_id))}<br><span class="filter-meta">${esc(t.from_unit)} · ${esc(t.from_team)}</span></td><td>${esc(t.from_room||'Chưa rõ')}</td><td>${esc(t.to_room)}<br><span class="filter-meta">${esc(units[t.to_unit]||t.to_unit)}</span></td><td>${esc(t.note||'—')}</td><td>${fmtDate(t.created_at)}<br><span class="filter-meta">${fmtTime(t.created_at)}</span></td><td>${transferBadge(t.status)}</td></tr>`;
+  return `<section class="panel"><div class="panel-heading"><div><h2>Chờ chấp nhận chuyển phòng</h2><p>Hồ sơ đã rời phòng cũ và chờ phân quyền App mẹ xác nhận</p></div>${badge(`${pending.length} yêu cầu`,'amber')}</div>${pending.length?`<div class="table-wrap"><table>${head}<tbody>${pending.map(row).join('')}</tbody></table></div>`:'<p class="demo-caption" style="padding:0 21px 18px">Chưa có yêu cầu nào đang chờ. Dùng nút “Chuyển phòng ở” để tạo yêu cầu.</p>'}${decided.length?`<div class="panel-heading"><div><h2>Đã xử lý gần đây</h2><p>5 yêu cầu mới nhất trong phạm vi đang xem</p></div></div><div class="table-wrap"><table>${head}<tbody>${decided.map(row).join('')}</tbody></table></div>`:''}</section>`;
 }
 function eventTable(events) {
   if (!events.length) return empty('Chưa có nhật ký ra/vào','Ghi nhận một lượt vào hoặc ra để bắt đầu theo dõi.');
@@ -360,7 +374,7 @@ function detail(id) {
   const w=state.data.workers.find(w=>w.id===id); if(!w) return;
   const rating=(key,labels)=>w.loai==='Gia thuộc'?'Không áp dụng':!w._manuallyRated?'Mặc định 3/5 · Chưa đánh giá':w[key]===null?'Chưa chấm':`<span class="stars" aria-label="${w[key]} trên 5 sao">${Array.from({length:w[key]},()=>icon('star')).join('')}</span><br>${esc(labels[w[key]])}`;
   const fields=[['Mã liên thông',w.person_id],['Đơn vị',units[w.unit_id]],['Phân loại',w.loai],['Tổ',w.to],['Tên trên hồ sơ',w.ten_ho_so],['CMND / CCCD',w.cmnd],['Ngày sinh',fmtDate(w.ngay_sinh)],['Tuổi',ageAt(w.ngay_sinh)],['Giới tính',w.gioi_tinh==='M'?'Nam':w.gioi_tinh==='F'?'Nữ':''],['Nơi sinh',w.noi_sinh],['Điện thoại',w.so_dt],['Nhóm máu',w.nhom_mau||'Chưa xác định'],['Khu vực',w.khu_vuc],['Phần cây',w.phan_cay],['Số bảo hiểm',w.so_bao_hiem],['Phòng ở',w.phong_o],['Vai trò phòng ở',w.chu_phong?'Chủ phòng':'Thành viên'],['Quan hệ cư trú',w.quan_he],['Chi tiết nơi ở',w.chi_tiet_noi_o],['Địa chỉ thường trú',w.dia_chi]];
-  showModal('Hồ sơ công nhân',`<div class="dialog-body"><div class="profile-top">${avatarMarkup(w,'avatar profile-avatar')}<div><h3>${esc(w.ten_that)}</h3>${profileStatus(w)}<p>${esc(w.person_id)} · Phiên bản ${w.version}</p></div></div>${idPhotos(w)}<dl class="profile-grid">${fields.map(([t,v])=>`<div><dt>${t}</dt><dd>${esc(v||'Chưa cập nhật')}</dd></div>`).join('')}<div><dt>Kỹ năng lao động</dt><dd>${rating('danh_gia_ky_nang',skillLabels)}</dd></div><div><dt>Đạo đức & Kỷ luật</dt><dd>${rating('danh_gia_dao_duc',ethicsLabels)}</dd></div><div><dt>Trạng thái cổng</dt><dd>${isInside(w.id)?'Đang ở trong':'Không có lượt vào đang mở'}</dd></div></dl>${needsReview(w)?`<section class="profile-review"><h3>Theo dõi & khắc phục</h3><p>${esc(w.trang_thai_ky_luat||'Cần xem xét')} · ${fmtDate(w.ngay_ky_luat)}</p><p>${esc(w.hinh_thuc_ky_luat||'Chưa ghi hình thức')} · ${esc(w.nguoi_lap_bien_ban||'Chưa phân công')}</p><p class="preserve-lines">${esc(w.ghi_chu_ky_luat||'Chưa ghi nội dung')}</p></section>`:''}${w.ghi_chu?`<p class="preserve-lines">${esc(w.ghi_chu)}</p>`:''}${notice('Ảnh quét không lưu kèm hồ sơ. Có số giấy tờ hoặc kết quả OCR không đồng nghĩa đã xác minh danh tính.',true)}</div>`,`${w.status==='active'?button('Lưu trữ','archive-confirm','archive','danger',`data-id="${esc(id)}"`):''}${button('Đóng','close',null,'secondary')}${w.status==='active'?button('Chỉnh sửa','edit-worker','edit','primary',`data-id="${esc(id)}"`):''}`);
+  showModal('Hồ sơ công nhân',`<div class="dialog-body"><div class="profile-top">${avatarMarkup(w,'avatar profile-avatar')}<div><h3>${esc(w.ten_that)}</h3>${profileStatus(w)}<p>${esc(w.person_id)} · Phiên bản ${w.version}</p></div></div>${idPhotos(w)}${pendingTransfer(w.id)?`<section class="profile-review"><h3>Chờ nhận phòng ${esc(pendingTransfer(w.id).to_room)}</h3><p>Từ phòng ${esc(pendingTransfer(w.id).from_room||'chưa xác định')} · Đơn vị đích ${esc(units[pendingTransfer(w.id).to_unit]||pendingTransfer(w.id).to_unit)}</p><p>Hồ sơ đã rời phòng cũ và đang chờ phân quyền App mẹ xác nhận.</p>${pendingTransfer(w.id).note?`<p class="preserve-lines">${esc(pendingTransfer(w.id).note)}</p>`:''}</section>`:''}<dl class="profile-grid">${fields.map(([t,v])=>`<div><dt>${t}</dt><dd>${esc(v||'Chưa cập nhật')}</dd></div>`).join('')}<div><dt>Kỹ năng lao động</dt><dd>${rating('danh_gia_ky_nang',skillLabels)}</dd></div><div><dt>Đạo đức & Kỷ luật</dt><dd>${rating('danh_gia_dao_duc',ethicsLabels)}</dd></div><div><dt>Trạng thái cổng</dt><dd>${isInside(w.id)?'Đang ở trong':'Không có lượt vào đang mở'}</dd></div></dl>${needsReview(w)?`<section class="profile-review"><h3>Theo dõi & khắc phục</h3><p>${esc(w.trang_thai_ky_luat||'Cần xem xét')} · ${fmtDate(w.ngay_ky_luat)}</p><p>${esc(w.hinh_thuc_ky_luat||'Chưa ghi hình thức')} · ${esc(w.nguoi_lap_bien_ban||'Chưa phân công')}</p><p class="preserve-lines">${esc(w.ghi_chu_ky_luat||'Chưa ghi nội dung')}</p></section>`:''}${w.ghi_chu?`<p class="preserve-lines">${esc(w.ghi_chu)}</p>`:''}${notice('Ảnh quét không lưu kèm hồ sơ. Có số giấy tờ hoặc kết quả OCR không đồng nghĩa đã xác minh danh tính.',true)}</div>`,`${w.status==='active'?button('Lưu trữ','archive-confirm','archive','danger',`data-id="${esc(id)}"`):''}${button('Đóng','close',null,'secondary')}${w.status==='active'?button('Chỉnh sửa','edit-worker','edit','primary',`data-id="${esc(id)}"`):''}`);
 }
 const ocrFields = {ten_that:'Tên thật',cmnd:'Số CMND / CCCD',ngay_sinh:'Ngày sinh',gioi_tinh:'Giới tính',noi_sinh:'Nơi sinh',dia_chi:'Địa chỉ thường trú'};
 function ocrResultsMarkup(result,existing) {
@@ -453,6 +467,19 @@ function eventForm(gate='Cổng chính') {
 function visitorForm() {
   showModal('Đăng ký khách đến đơn vị',`<form id="visitor-form"><div class="dialog-body"><div class="form-grid">${field('Họ tên khách minh họa','name','','text',true)}${field('Công ty / đơn vị','company','','text',true)}${selectField('Đơn vị đến','unit_id',Object.entries(units),state.unit==='all'?'DSX02':state.unit)}${field('Người đón','host','','text',true)}${field('Ngày dự kiến','expected',today(),'date',true)}${field('Mục đích đến','purpose','','text',true,true)}</div><p class="form-note">Chỉ đăng ký thông tin minh họa. Nhân viên bảo vệ xác nhận riêng khi khách thực sự vào hoặc ra.</p><div class="form-error" role="alert"></div></div><div class="dialog-footer">${button('Hủy','close',null,'secondary','type="button"')}<button class="button primary" type="submit">${icon('check')}Lưu đăng ký</button></div></form>`);
 }
+function transferForm() {
+  const list=activeWorkers().filter(w=>w.phong_o);
+  if(!list.length) return toast('Chưa có hồ sơ nào đang có phòng ở để chuyển.');
+  const first=list[0], unit=state.unit==='all'?first.unit_id:state.unit;
+  const roomList=state.data.rooms.filter(r=>r.unit_id===unit&&r.id!==first.phong_o);
+  showModal('Chuyển phòng ở',`<form id="transfer-form"><div class="dialog-body">
+    ${notice('Gửi yêu cầu là hồ sơ <b>rời phòng hiện tại ngay</b> và vào danh sách chờ chấp nhận. Chỉ khi phân quyền App mẹ xác nhận, hồ sơ mới được xếp vào phòng đích.')}
+    <div class="form-grid">${selectField('Hồ sơ cần chuyển','worker_id',list.map(w=>[w.id,`${w.person_id} · ${w.ten_that} · Phòng ${w.phong_o}`]),first.id,true)}${selectField('Đơn vị đích','to_unit',Object.entries(units),unit)}${selectField('Phòng đích','to_room',roomList.map(r=>[r.id,`${r.id} · ${occupancy(r)}/${r.capacity} người`]),roomList[0]?.id)}${field('Lý do / ghi chú','note','','text',false,true,'',500)}</div>
+    <p class="form-note">Có thể chọn phòng ở Đội khác hoặc Nhà máy chế biến. Hồ sơ đang ở trong cổng phải được ghi nhận ra cổng trước khi chuyển sang đơn vị khác.</p>
+    <div class="form-error" role="alert"></div></div><div class="dialog-footer">${button('Hủy','close',null,'secondary','type="button"')}<button class="button primary" type="submit">${icon('check')}Gửi yêu cầu</button></div></form>`);
+  const room= dialog.querySelector('[name="to_room"]');
+  if(room.options.length) room.required=true;
+}
 function download(name,content,type) { const url=URL.createObjectURL(new Blob([content],{type}));const a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000); }
 function csvValue(value) { let text=String(value??'');if(/^[\s]*[=+@\-\t\r]/.test(text)) text="'"+text;return '"'+text.replace(/"/g,'""')+'"'; }
 function csv(name,headers,rows) { download(`${name}-${today()}.csv`,'\uFEFF'+[headers,...rows].map(r=>r.map(csvValue).join(',')).join('\r\n'),'text/csv;charset=utf-8');toast('Đã tạo CSV minh họa theo bộ lọc hiện tại.'); }
@@ -476,6 +503,7 @@ async function action(el) {
     return;
   }
   if(type==='new-event') return eventForm(el.dataset.gate);
+  if(type==='new-transfer') return transferForm();
   if(type==='new-visitor') return visitorForm();
   if(type==='open-discipline') return go('discipline');
   if(type==='choose-review-worker'){resetWorkerFilters({type:'Lao động'});go('workers');return;}
@@ -512,7 +540,7 @@ document.addEventListener('click', async e => {
 });
 document.addEventListener('submit', async e => {
   const form=e.target;
-  if(!['worker-form','event-form','visitor-form','archive-form','visitor-transition-form'].includes(form.id)) return;
+  if(!['worker-form','event-form','visitor-form','archive-form','visitor-transition-form','transfer-form'].includes(form.id)) return;
   e.preventDefault();const submit=form.querySelector('[type="submit"]'),errorEl=form.querySelector('.form-error');submit.disabled=true;errorEl.textContent='';
   try {
     let body=Object.fromEntries(new FormData(form)), path, message;
@@ -528,6 +556,12 @@ document.addEventListener('submit', async e => {
     if(form.id==='visitor-form'){path='visitors';message='Đã đăng ký khách. Chưa xác nhận vào cổng.';}
     if(form.id==='archive-form'){path='workers/archive';body={id:form.dataset.id,version:Number(form.dataset.version)};message='Đã lưu trữ hồ sơ và giải phóng phòng ở.';}
     if(form.id==='visitor-transition-form'){path='visitors/transition';body={id:form.dataset.id,version:Number(form.dataset.version),status:form.dataset.status};message='Đã cập nhật trạng thái khách.';}
+    if(form.id==='transfer-form'){
+      const worker=state.data.workers.find(w=>w.id===body.worker_id);
+      if(!worker) throw new Error('Chọn hồ sơ cần chuyển phòng.');
+      path='transfers';body={worker_id:worker.id,version:worker.version,to_room:body.to_room,note:body.note};
+      message='Đã gửi yêu cầu chuyển phòng. Hồ sơ đã rời phòng cũ và đang chờ chấp nhận.';
+    }
     await api(path,body);closeModal();
     try {await refresh();toast(message);} catch {toast('Đã lưu nhưng chưa tải được danh sách mới. Hãy tải lại trang.');}
   } catch(error) {errorEl.textContent=error.message;submit.disabled=false;}
@@ -545,6 +579,13 @@ document.addEventListener('change',e=>{
     if(e.target.name==='unit_id'){const room=dialog.querySelector('[name="phong_o"]');room.innerHTML=selectOptions(roomOptions(e.target.value),'');}
     if(['unit_id','phong_o'].includes(e.target.name)) dialog.querySelector('[name="chu_phong"]').checked=false;
     if(['unit_id','phong_o','loai','_manuallyRated'].includes(e.target.name)) syncWorkerControls();
+  }
+  if(e.target.closest('#transfer-form') && ['worker_id','to_unit'].includes(e.target.name)) {
+    const form=e.target.closest('#transfer-form'), worker=state.data.workers.find(w=>w.id===form.elements.worker_id.value);
+    const unit=e.target.name==='to_unit'?e.target.value:(state.unit==='all'?worker?.unit_id:state.unit);
+    form.elements.to_unit.value=unit;
+    const rooms=state.data.rooms.filter(r=>r.unit_id===unit&&r.id!==worker?.phong_o);
+    form.elements.to_room.innerHTML=selectOptions(rooms.map(r=>[r.id,`${r.id} · ${occupancy(r)}/${r.capacity} người`]),'');
   }
   if(e.target.id==='ocr-select-all'){for(const box of document.querySelectorAll('[data-ocr-field]')) box.checked=e.target.checked;}
   if(e.target.id==='ocr-confirm') document.getElementById('ocr-confirm-row')?.classList.remove('needs-check');

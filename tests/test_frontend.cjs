@@ -18,7 +18,7 @@ function fixture() {
     URL,Blob,Intl,Date,console,
   });
   const script = fs.readFileSync(path.join(__dirname,'../static/app.js'),'utf8');
-  vm.runInContext(script+'\nglobalThis.helpers={esc,normalize,csvValue,filteredWorkers,workersResults,workerTable,workerList,occupancy,isInside,state,currentRoute,needsReview,disciplineWorkers,ratingText,ageAt,matchesWorker,ocrResultsMarkup,resetWorkerFilters};',context);
+  vm.runInContext(script+'\nglobalThis.helpers={esc,normalize,csvValue,filteredWorkers,workersResults,workerTable,workerList,occupancy,isInside,state,currentRoute,needsReview,disciplineWorkers,ratingText,ageAt,matchesWorker,ocrResultsMarkup,resetWorkerFilters,pendingTransfer,transferPanel,transferBadge};',context);
   return {...context.helpers, location:context.location};
 }
 
@@ -55,6 +55,31 @@ test('gate presence is based on latest event, not array order',()=>{
 test('pagination clamps after a filter leaves fewer results',()=>{
   const h=fixture();h.state.data={workers:[person()]};h.state.page=5;
   const html=h.workersResults();assert.equal(h.state.page,1);assert.match(html,/Trang 1 \/ 1/);
+});
+
+test('pending room transfer flags the worker and escapes notes',()=>{
+  const h=fixture();
+  h.state.data={workers:[person({phong_o:''})],transfers:[{id:'t1',worker_id:'one',from_unit:'DSX02',from_team:'Tổ 1',from_room:'A01',to_unit:'DSX03',to_room:'B02',note:'<img onerror=alert(1)>',status:'pending',created_at:'2026-10-29T03:00:00Z',decided_at:'',decision_note:''}]};
+  h.state.unit='DSX02';
+  const row=h.pendingTransfer('one'), html=h.transferPanel();
+  assert.equal(row.to_room,'B02');assert.equal(h.pendingTransfer('absent'),undefined);
+  assert.match(h.workerList([person({phong_o:''})]),/Chờ nhận phòng/);
+  assert.match(html,/Chờ chấp nhận/);assert.match(html,/B02/);assert.match(html,/DSX03/);
+  assert.doesNotMatch(html,/<img onerror/);
+  assert.match(h.transferBadge('approved'),/Đã chấp nhận/);assert.match(h.transferBadge('rejected'),/Từ chối/);
+});
+test('transfer panel hides other units and separates decided transfers',()=>{
+  const h=fixture();
+  h.state.data={workers:[person({phong_o:''})],transfers:[
+    {id:'t1',worker_id:'one',from_unit:'DSX02',from_team:'Tổ 1',from_room:'A01',to_unit:'DSX03',to_room:'B02',note:'',status:'pending',created_at:'2026-10-29T03:00:00Z',decided_at:'',decision_note:''},
+    {id:'t2',worker_id:'one',from_unit:'NMCB',from_team:'Tổ 2',from_room:'C01',to_unit:'NMCB',to_room:'C02',note:'',status:'approved',created_at:'2026-10-28T03:00:00Z',decided_at:'2026-10-28T04:00:00Z',decision_note:'Mẫu'},
+  ]};
+  h.state.unit='DSX03';
+  let html=h.transferPanel();
+  assert.match(html,/1 yêu cầu/);assert.doesNotMatch(html,/C02/);
+  h.state.unit='all';html=h.transferPanel();
+  assert.match(html,/Đã xử lý gần đây/);assert.match(html,/C02/);
+  assert.match(h.workerTable([person({phong_o:''})]),/Chờ nhận phòng/);
 });
 
 test('landing page is worker search with company scope',()=>{

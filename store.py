@@ -39,6 +39,7 @@ READ_ONLY = {"id", "person_id", "status", "version", "updated_at"}
 EVENT_TYPES = (
     "worker.created", "worker.updated", "worker.archived", "gate.in", "gate.out",
     "visitor.registered", "visitor.inside", "visitor.left",
+    "transfer.requested", "transfer.approved", "transfer.rejected",
 )
 
 
@@ -158,6 +159,8 @@ class Store:
             "CREATE TABLE IF NOT EXISTS outbox (event_id TEXT PRIMARY KEY, entity_id TEXT NOT NULL, person_id TEXT NOT NULL, unit_id TEXT NOT NULL, entity_version INTEGER NOT NULL, event_type TEXT NOT NULL, occurred_at TEXT NOT NULL, status TEXT NOT NULL)",
             "CREATE TABLE IF NOT EXISTS worker_images (worker_id TEXT NOT NULL REFERENCES workers(id) ON DELETE CASCADE, kind TEXT NOT NULL, drive_id TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY(worker_id, kind))",
             "CREATE TABLE IF NOT EXISTS legacy_links (legacy_id INTEGER PRIMARY KEY, worker_id TEXT NOT NULL UNIQUE REFERENCES workers(id))",
+            "CREATE TABLE IF NOT EXISTS transfers (id TEXT PRIMARY KEY, worker_id TEXT NOT NULL REFERENCES workers(id), from_unit TEXT NOT NULL, from_team TEXT NOT NULL, from_room TEXT NOT NULL, to_unit TEXT NOT NULL, to_team TEXT NOT NULL, to_room TEXT NOT NULL, note TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, decided_at TEXT NOT NULL, decision_note TEXT NOT NULL)",
+            "CREATE INDEX IF NOT EXISTS transfers_worker ON transfers(worker_id, status)",
         )
         with self.transaction() as connection:
             for statement in statements:
@@ -272,12 +275,14 @@ class Store:
                 "rooms": [dict(row) for row in connection.execute("SELECT * FROM rooms ORDER BY id")],
                 "events": [dict(row) for row in connection.execute("SELECT * FROM events ORDER BY at DESC, rowid DESC")],
                 "visitors": [json.loads(row["data"]) for row in connection.execute("SELECT data FROM visitors ORDER BY created_at DESC, rowid DESC")],
+                "transfers": [dict(row) for row in connection.execute("SELECT * FROM transfers ORDER BY created_at DESC, rowid DESC")],
                 "audit": [dict(row) for row in connection.execute("SELECT * FROM audit ORDER BY at DESC, rowid DESC")],
                 "outbox": [dict(row) for row in connection.execute("SELECT * FROM outbox ORDER BY occurred_at DESC, rowid DESC")],
                 "images": self._image_index(connection),
                 "meta": {
                     "source": "Dữ liệu công ty" if imported else "Dữ liệu minh họa",
                     "integration": "disconnected",
+                    "transfer_approval": "external",
                 },
             }
 
@@ -397,6 +402,10 @@ class Store:
                 }
             for field in EDITABLE & set(payload):
                 worker[field] = payload[field]
+            if existing and connection.execute(
+                    "SELECT 1 FROM transfers WHERE worker_id = ? AND status = 'pending'", (worker["id"],)).fetchone() and (
+                    worker["phong_o"] or worker["unit_id"] != existing["unit_id"]):
+                raise APIError(409, "Hồ sơ đang chờ chuyển phòng. Cần xử lý yêu cầu trước khi bố trí phòng mới.")
             self._validate_worker(connection, worker)
             if existing and "chu_phong" not in payload and (
                 worker["unit_id"] != existing["unit_id"] or worker["phong_o"] != existing["phong_o"]
@@ -437,9 +446,98 @@ class Store:
             previous_version = worker["version"]
             worker.update(status="archived", phong_o="", chu_phong=False, version=previous_version + 1, updated_at=timestamp())
             self._update_worker(connection, worker, previous_version)
+            connection.execute(
+                "UPDATE transfers SET status = 'rejected', decided_at = ?, decision_note = ? WHERE worker_id = ? AND status = 'pending'",
+                (worker["updated_at"], "Hồ sơ đã được lưu trữ.", worker_id),
+            )
             self._record(connection, "worker.archived", worker["id"], worker["person_id"], worker["unit_id"], worker["version"],
                          "Lưu trữ hồ sơ và giải phóng phòng ở.", worker["updated_at"])
             return {"ok": True}
+
+    def request_transfer(self, payload):
+        schema(payload, {"worker_id", "version", "to_room", "note"}, {"worker_id", "version", "to_room"})
+        worker_id = uuid_field(payload["worker_id"], "worker_id")
+        to_room = text(payload["to_room"], "to_room", required=True, maximum=20)
+        note = text(payload.get("note", ""), "note", maximum=500)
+        with self.transaction() as connection:
+            worker = self._worker(connection, worker_id)
+            check_version(payload, worker)
+            if worker["status"] != "active":
+                raise APIError(409, "Hồ sơ đã lưu trữ, không thể chuyển phòng.")
+            if connection.execute("SELECT 1 FROM transfers WHERE worker_id = ? AND status = 'pending'",
+                                  (worker_id,)).fetchone():
+                raise APIError(409, "Hồ sơ đang có yêu cầu chuyển phòng chờ chấp nhận.")
+            if not worker["phong_o"]:
+                raise APIError(400, "Hồ sơ chưa có phòng ở để chuyển.")
+            room = connection.execute("SELECT id, unit_id FROM rooms WHERE id = ?", (to_room,)).fetchone()
+            if room is None:
+                raise APIError(400, "Phòng đích không tồn tại.")
+            if room["id"] == worker["phong_o"]:
+                raise APIError(400, "Phòng đích trùng với phòng hiện tại.")
+            if room["unit_id"] != worker["unit_id"]:
+                latest = self._latest_event(connection, worker_id)
+                if latest and latest["direction"] == "in":
+                    raise APIError(409, "Cần ghi nhận ra cổng trước khi chuyển sang đơn vị khác.")
+            created_at = timestamp()
+            transfer = {
+                "id": identifier(), "worker_id": worker_id,
+                "from_unit": worker["unit_id"], "from_team": worker["to"], "from_room": worker["phong_o"],
+                "to_unit": room["unit_id"], "to_team": worker["to"], "to_room": room["id"],
+                "note": note, "status": "pending", "created_at": created_at,
+                "decided_at": "", "decision_note": "",
+            }
+            connection.execute(
+                "INSERT INTO transfers(id, worker_id, from_unit, from_team, from_room, to_unit, to_team, to_room, note, status, created_at, decided_at, decision_note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                tuple(transfer[key] for key in ("id", "worker_id", "from_unit", "from_team", "from_room",
+                                                "to_unit", "to_team", "to_room", "note", "status",
+                                                "created_at", "decided_at", "decision_note")),
+            )
+            previous_version = worker["version"]
+            worker.update(phong_o="", chu_phong=False, version=previous_version + 1, updated_at=created_at)
+            self._update_worker(connection, worker, previous_version)
+            self._record(connection, "transfer.requested", worker_id, worker["person_id"], worker["unit_id"], worker["version"],
+                         f"Yêu cầu chuyển từ phòng {transfer['from_room']} sang phòng {transfer['to_room']} ({transfer['to_unit']}); đã rời phòng hiện tại.",
+                         created_at)
+            return {"ok": True, "transfer": transfer, "worker": worker}
+
+    def decide_transfer(self, payload):
+        schema(payload, {"id", "decision", "note"}, {"id", "decision"})
+        transfer_id = uuid_field(payload["id"])
+        decision = choice(payload["decision"], "decision", ("approve", "reject"))
+        note = text(payload.get("note", ""), "note", maximum=500)
+        with self.transaction() as connection:
+            row = connection.execute("SELECT * FROM transfers WHERE id = ?", (transfer_id,)).fetchone()
+            if row is None:
+                raise APIError(404, "Không tìm thấy yêu cầu chuyển phòng.")
+            if row["status"] != "pending":
+                raise APIError(409, "Yêu cầu đã được xử lý.")
+            worker = self._worker(connection, row["worker_id"])
+            decided_at = timestamp()
+            result_worker = None
+            if decision == "approve":
+                if worker["status"] != "active":
+                    raise APIError(409, "Hồ sơ đã lưu trữ, không thể tiếp nhận.")
+                room = connection.execute("SELECT unit_id FROM rooms WHERE id = ?", (row["to_room"],)).fetchone()
+                if room is None or room["unit_id"] != row["to_unit"]:
+                    raise APIError(409, "Phòng đích không còn phù hợp.")
+                if worker["unit_id"] != row["to_unit"]:
+                    latest = self._latest_event(connection, worker["id"])
+                    if latest and latest["direction"] == "in":
+                        raise APIError(409, "Cần ghi nhận ra cổng trước khi chuyển sang đơn vị khác.")
+                previous_version = worker["version"]
+                worker.update(unit_id=row["to_unit"], to=row["to_team"], phong_o=row["to_room"], chu_phong=False,
+                              version=previous_version + 1, updated_at=decided_at)
+                self._update_worker(connection, worker, previous_version)
+                result_worker = worker
+            status = "approved" if decision == "approve" else "rejected"
+            connection.execute("UPDATE transfers SET status = ?, decided_at = ?, decision_note = ? WHERE id = ?",
+                               (status, decided_at, note, transfer_id))
+            self._record(connection, f"transfer.{status}", worker["id"], worker["person_id"], worker["unit_id"],
+                         worker["version"],
+                         "Chấp nhận chuyển phòng." if decision == "approve"
+                         else "Từ chối chuyển phòng; hồ sơ vẫn chưa có phòng ở.", decided_at)
+            transfer = dict(connection.execute("SELECT * FROM transfers WHERE id = ?", (transfer_id,)).fetchone())
+            return {"ok": True, "transfer": transfer, "worker": result_worker}
 
     def _insert_event(self, connection, worker, direction, gate, at):
         event = {
@@ -521,6 +619,7 @@ class Store:
                 "units": list(UNITS), "rooms": "Mã phòng duy nhất, thuộc một đơn vị",
                 "gate_events": "Sự kiện bất biến; entity_id là UUID lượt cổng, entity_version = 1",
                 "visitors": "UUID riêng; person_id rỗng, phiên bản tăng theo chuyển trạng thái",
+                "room_transfers": "UUID riêng; gồm phòng đi, phòng đích và trạng thái chờ/chấp nhận/từ chối",
                 "ownership": "Bản nháp; chưa xác lập nguồn dữ liệu chủ với hệ thống đích",
             },
             "events": list(EVENT_TYPES),
@@ -535,5 +634,6 @@ class Store:
                 "Bên nhận tương lai phải xử lý idempotency bằng event_id và optimistic concurrency bằng entity_version.",
                 "Trước tích hợp thật cần SSO, RBAC, webhook HMAC, TLS, consent và retention được phê duyệt.",
                 "Phiên demo cục bộ không phải cơ chế xác thực hoặc phân quyền.",
+                "Duyệt chuyển phòng chỉ qua token máy chủ; giao diện này không bật nút duyệt.",
             ],
         }

@@ -121,7 +121,9 @@ class StoreTests(unittest.TestCase):
         self.assertEqual({f"Tổ {i}" for i in range(1, 5)}, {w["to"] for w in data["workers"]})
         self.assertEqual(48, len({w["id"] for w in data["workers"]}))
         self.assertEqual(48, len({w["person_id"] for w in data["workers"]}))
-        self.assertEqual({"source": "Dữ liệu minh họa", "integration": "disconnected"}, data["meta"])
+        self.assertEqual({"source": "Dữ liệu minh họa", "integration": "disconnected",
+                          "transfer_approval": "external"}, data["meta"])
+        self.assertEqual([], data["transfers"])
         self.assertEqual({
             "units": [{"id": f"DSX{number:02d}", "name": f"Đội sản xuất {number:02d}"} for number in range(1, 9)]
                      + [{"id": "NMCB", "name": "Nhà máy chế biến"}],
@@ -336,6 +338,101 @@ class StoreTests(unittest.TestCase):
         moved = self.store.save_worker(change)["worker"]
         self.assertEqual("DSX03", moved["unit_id"])
         self.assertEqual(worker["person_id"], moved["person_id"])
+
+    def test_room_transfer_request_frees_room_until_approval(self):
+        worker = self.store.save_worker(fictional_worker(phong_o="A02", chu_phong=True))["worker"]
+        result = self.store.request_transfer({"worker_id": worker["id"], "version": 1, "to_room": "A03",
+                                              "note": "Lý do hoàn toàn hư cấu"})
+        transfer, moved = result["transfer"], result["worker"]
+        self.assertEqual("pending", transfer["status"])
+        self.assertEqual(("DSX02", "A02", "DSX02", "A03"), (transfer["from_unit"], transfer["from_room"],
+                                                            transfer["to_unit"], transfer["to_room"]))
+        self.assertEqual(("", False, 2), (moved["phong_o"], moved["chu_phong"], moved["version"]))
+        self.assertEqual([transfer], self.store.bootstrap()["transfers"])
+        self.assert_api_error(409, self.store.request_transfer,
+                              {"worker_id": worker["id"], "version": 2, "to_room": "A04"})
+        self.assert_api_error(409, self.store.save_worker,
+                              {"id": worker["id"], "version": 2, "phong_o": "A04"})
+        self.assertEqual([transfer], self.store.bootstrap()["transfers"])
+
+    def test_room_transfer_validation_errors_leave_data_untouched(self):
+        worker = self.store.save_worker(fictional_worker(phong_o="A02"))["worker"]
+        before = self.store.bootstrap()
+        self.assert_api_error(400, self.store.request_transfer,
+                              {"worker_id": worker["id"], "version": 1, "to_room": "A02"})
+        self.assert_api_error(400, self.store.request_transfer,
+                              {"worker_id": worker["id"], "version": 1, "to_room": "MISSING"})
+        self.assert_api_error(409, self.store.request_transfer,
+                              {"worker_id": worker["id"], "version": 2, "to_room": "A03"})
+        self.assert_api_error(404, self.store.request_transfer,
+                              {"worker_id": str(uuid.uuid4()), "version": 1, "to_room": "A03"})
+        self.assert_api_error(400, self.store.request_transfer,
+                              {"worker_id": worker["id"], "version": 1, "to_room": "A03", "extra": 1})
+        self.assertEqual(before, self.store.bootstrap())
+        no_room = self.store.save_worker(fictional_worker(phong_o=""))["worker"]
+        self.assert_api_error(400, self.store.request_transfer,
+                              {"worker_id": no_room["id"], "version": 1, "to_room": "A03"})
+        archived = self.store.save_worker(fictional_worker(phong_o=""))["worker"]
+        self.store.archive_worker({"id": archived["id"], "version": 1})
+        self.assert_api_error(409, self.store.request_transfer,
+                              {"worker_id": archived["id"], "version": 2, "to_room": "A03"})
+
+    def test_room_transfer_across_units_requires_closed_gate_visit(self):
+        worker = self.store.save_worker(fictional_worker(phong_o="A02"))["worker"]
+        event = {"worker_id": worker["id"], "direction": "in", "gate": "Cổng chính"}
+        self.store.add_event(event)
+        cross = {"worker_id": worker["id"], "version": 1, "to_room": "B02"}
+        before = self.counts()
+        self.assert_api_error(409, self.store.request_transfer, cross)
+        self.assertEqual(before, self.counts())
+        self.store.add_event(dict(event, direction="out"))
+        transfer = self.store.request_transfer(cross)["transfer"]
+        self.assertEqual(("DSX02", "DSX03"), (transfer["from_unit"], transfer["to_unit"]))
+
+    def test_transfer_approval_moves_worker_and_rejection_keeps_room_empty(self):
+        first = self.store.save_worker(fictional_worker(phong_o="A02"))["worker"]
+        second = self.store.save_worker(fictional_worker(phong_o="A02"))["worker"]
+        approved = self.store.request_transfer({"worker_id": first["id"], "version": 1, "to_room": "A03"})["transfer"]
+        rejected = self.store.request_transfer({"worker_id": second["id"], "version": 1, "to_room": "A04"})["transfer"]
+        result = self.store.decide_transfer({"id": approved["id"], "decision": "approve", "note": "Duyệt minh họa"})
+        self.assertEqual(("approved", "Duyệt minh họa"), (result["transfer"]["status"], result["transfer"]["decision_note"]))
+        self.assertEqual(("A03", 3), (result["worker"]["phong_o"], result["worker"]["version"]))
+        result = self.store.decide_transfer({"id": rejected["id"], "decision": "reject"})
+        self.assertEqual("rejected", result["transfer"]["status"])
+        self.assertIsNone(result["worker"])
+        workers = {w["id"]: w for w in self.store.bootstrap()["workers"]}
+        self.assertEqual("A03", workers[first["id"]]["phong_o"])
+        self.assertEqual("", workers[second["id"]]["phong_o"])
+        self.assert_api_error(409, self.store.decide_transfer, {"id": approved["id"], "decision": "approve"})
+        self.assert_api_error(404, self.store.decide_transfer, {"id": str(uuid.uuid4()), "decision": "approve"})
+        self.assert_api_error(400, self.store.decide_transfer, {"id": rejected["id"], "decision": "maybe"})
+        events = {item["event_type"] for item in self.store.bootstrap()["outbox"]}
+        self.assertLessEqual({"transfer.requested", "transfer.approved", "transfer.rejected"}, events)
+
+    def test_archiving_worker_cancels_pending_transfer(self):
+        worker = self.store.save_worker(fictional_worker(phong_o="A02"))["worker"]
+        transfer = self.store.request_transfer({"worker_id": worker["id"], "version": 1, "to_room": "A03"})["transfer"]
+        self.store.archive_worker({"id": worker["id"], "version": 2})
+        pending = self.store.bootstrap()["transfers"]
+        self.assertEqual(1, len(pending))
+        self.assertEqual("rejected", pending[0]["status"])
+        self.assert_api_error(409, self.store.decide_transfer, {"id": transfer["id"], "decision": "approve"})
+
+    def test_concurrent_transfer_decisions_have_one_winner(self):
+        worker = self.store.save_worker(fictional_worker(phong_o="A02"))["worker"]
+        transfer = self.store.request_transfer({"worker_id": worker["id"], "version": 1, "to_room": "A03"})["transfer"]
+        def decide(decision):
+            try:
+                self.store.decide_transfer({"id": transfer["id"], "decision": decision})
+                return "ok"
+            except APIError as error:
+                return error.status
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = Counter(pool.map(decide, ("approve", "reject")))
+        self.assertEqual(1, results["ok"])
+        self.assertEqual(1, results[409])
+        self.assertEqual(1, sum(item["event_type"] in {"transfer.approved", "transfer.rejected"}
+                                for item in self.store.bootstrap()["outbox"]))
 
     def test_room_leader_requires_active_nondependent_and_room(self):
         worker = self.store.save_worker(fictional_worker(chu_phong=True))["worker"]
@@ -930,6 +1027,30 @@ class HTTPTests(unittest.TestCase):
         persisted = Store(self.root / "data").bootstrap()
         self.assertEqual("archived", next(w for w in persisted["workers"] if w["id"] == worker["id"])["status"])
         self.assertEqual(visitor, next(v for v in persisted["visitors"] if v["id"] == visitor["id"]))
+
+    def test_room_transfer_endpoint_and_external_decision(self):
+        worker = self.api("POST", "/api/v1/workers", fictional_worker(phong_o="A02"))["worker"]
+        transfer = self.api("POST", "/api/v1/transfers", {
+            "worker_id": worker["id"], "version": 1, "to_room": "A03", "note": "Mẫu hư cấu",
+        })["transfer"]
+        self.assertEqual("pending", transfer["status"])
+        self.api("GET", "/api/v1/transfers", expected=405)
+        self.api("POST", "/api/v1/transfers", {"worker_id": worker["id"], "version": 2, "to_room": "A04"}, expected=409)
+        data = self.api("GET", "/api/v1/bootstrap")
+        self.assertEqual([transfer["id"]], [item["id"] for item in data["transfers"]])
+        self.assertEqual("", next(w for w in data["workers"] if w["id"] == worker["id"])["phong_o"])
+        payload = {"id": transfer["id"], "decision": "approve"}
+        self.api("POST", "/api/v1/transfers/decision", payload, expected=404)
+        with patch.dict(os.environ, {"CN_SYNC_TOKEN": "t" * 32}):
+            self.api("POST", "/api/v1/transfers/decision", payload, expected=401)
+            self.api("POST", "/api/v1/transfers/decision", payload, expected=401,
+                     headers={"Authorization": "Bearer " + "u" * 32, "Origin": None})
+            decided = self.api("POST", "/api/v1/transfers/decision", payload,
+                               headers={"Authorization": "Bearer " + "t" * 32, "Origin": None})
+        self.assertEqual("approved", decided["transfer"]["status"])
+        self.assertEqual("A03", decided["worker"]["phong_o"])
+        persisted = Store(self.root / "data").bootstrap()
+        self.assertEqual("A03", next(w for w in persisted["workers"] if w["id"] == worker["id"])["phong_o"])
 
     def test_extended_worker_fields_ratings_and_leader_conflicts_over_http(self):
         details = fictional_details()
