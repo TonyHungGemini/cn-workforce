@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#123c32">
+  <meta name="robots" content="noindex,nofollow">
+  <title>Đăng nhập · CN Workforce</title>
+  <link rel="icon" href="assets/mark.svg" type="image/svg+xml">
+  <link rel="manifest" href="manifest.webmanifest">
+  <style>
+    :root{font-family:"Be Vietnam Pro",system-ui,-apple-system,"Segoe UI",sans-serif;color:#243a32;background:#123c32}
+    *{box-sizing:border-box}body{margin:0;min-height:100svh;display:grid;place-items:center;padding:20px;background:
+      radial-gradient(1200px 600px at 15% -10%,#1f5a48 0%,transparent 55%),
+      radial-gradient(900px 500px at 110% 110%,#1c4b3e 0%,transparent 60%),#0e332a}
+    .card{width:min(430px,100%);background:#f7f9f8;border-radius:18px;padding:34px 30px 28px;box-shadow:0 30px 80px #051a1455}
+    .brand{display:flex;align-items:center;gap:12px;margin-bottom:26px}
+    .brand img{width:44px;height:44px}
+    .brand b{display:block;font-size:19px;letter-spacing:-.5px;color:#123c32}
+    .brand small{display:block;font-size:9px;letter-spacing:1.6px;color:#6d7d75;margin-top:2px}
+    .eyebrow{font-size:9px;letter-spacing:1.5px;color:#176b53;font-weight:600;margin:0 0 8px}
+    h1{font-size:26px;letter-spacing:-.9px;margin:0 0 8px;color:#123c32}
+    p.lead{font-size:12px;line-height:1.7;color:#5f6f68;margin:0 0 22px}
+    label{display:block;font-size:11px;font-weight:600;color:#33473f;margin-bottom:7px}
+    input{width:100%;padding:13px 14px;border:1px solid #d7e1db;border-radius:9px;background:#fff;font:inherit;font-size:14px;letter-spacing:.5px}
+    input:focus{outline:3px solid #79bba3;outline-offset:2px;border-color:#5aa68d}
+    button{width:100%;margin-top:14px;padding:13px;border:0;border-radius:9px;background:#176b53;color:#fff;font:inherit;font-weight:600;font-size:13px;cursor:pointer}
+    button:disabled{opacity:.6;cursor:wait}
+    .error{min-height:20px;margin:10px 0 0;font-size:11px;color:#b24e44}
+    .note{margin:20px 0 0;padding-top:16px;border-top:1px solid #e2eae5;font-size:10px;line-height:1.7;color:#7a8780}
+    .note b{color:#4f625a}
+    @media(max-width:420px){.card{padding:27px 21px 22px;border-radius:15px}h1{font-size:22px}}
+  </style>
+</head>
+<body>
+  <main class="card">
+    <div class="brand"><img src="assets/mark.svg" alt=""><span><b>CN Workforce</b><small>CÔNG NHÂN &amp; AN NINH</small></span></div>
+    <p class="eyebrow">PM QUẢN TRỊ HỢP NHẤT · C.R.C.K.2 APHIVATH</p>
+    <h1>Đăng nhập nội bộ</h1>
+    <p class="lead">Nhập mã truy cập công ty do quản trị viên cấp. Mọi người trong công ty dùng chung một mã; không chia sẻ mã ra ngoài.</p>
+    <form id="login-form" novalidate>
+      <label for="access-code">Mã truy cập công ty</label>
+      <input id="access-code" name="code" type="password" autocomplete="current-password" required autofocus>
+      <button type="submit" id="login-submit">Mở ứng dụng</button>
+      <p class="error" id="login-error" role="alert" aria-live="polite"></p>
+    </form>
+    <p class="note"><b>Dữ liệu thật.</b> Hệ thống chỉ dành cho nhân sự được phép. Không chụp màn hình hoặc gửi ảnh giấy tờ, chân dung ra ngoài. Phiên đăng nhập kéo dài 12 giờ trên thiết bị này.</p>
+  </main>
+  <script src="login.js" defer></script>
+</body>
+</html>

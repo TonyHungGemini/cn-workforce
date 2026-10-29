@@ -128,7 +128,7 @@ class StoreTests(unittest.TestCase):
                       {"id": "NMCB", "name": "Nhà máy chế biến"}],
             "teams": [f"Tổ {i}" for i in range(1, 9)],
         }, data["directory"])
-        self.assertEqual([{"key": "schema_version", "value": "1.1"}], self.database_snapshot()["metadata"])
+        self.assertEqual([{"key": "schema_version", "value": "1.2"}], self.database_snapshot()["metadata"])
         self.assertTrue(data["ok"])
         self.assertEqual("demo", data["mode"])
         self.assertEqual(12, len(data["rooms"]))
@@ -210,7 +210,7 @@ class StoreTests(unittest.TestCase):
                 patch.object(Store, "_record", side_effect=AssertionError("Must not create history")):
             self.store = Store(self.root / "data")
         after = self.database_snapshot()
-        self.assertEqual([{"key": "schema_version", "value": "1.1"}], after["metadata"])
+        self.assertEqual([{"key": "schema_version", "value": "1.2"}], after["metadata"])
         for table in before:
             if table not in {"workers", "metadata"}:
                 self.assertEqual(before[table], after[table], table)
@@ -220,7 +220,7 @@ class StoreTests(unittest.TestCase):
                              {k: v for k, v in new.items() if k != "data"})
             expected = dict(ADDED_DEFAULTS, **json.loads(old["data"]))
             self.assertEqual(expected, json.loads(new["data"]))
-        # Reopening 1.1 must not even rewrite the serialized JSON or bump versions.
+        # Reopening 1.2 must not even rewrite the serialized JSON or bump versions.
         with patch("store.encode", side_effect=AssertionError("Migration must be idempotent")):
             reopened = Store(self.root / "data")
         self.assertEqual(after, self.database_snapshot())
@@ -243,7 +243,7 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(2, len(calls))
         self.assertEqual(before, self.database_snapshot())
         self.store = Store(self.root / "data")
-        self.assertEqual([{"key": "schema_version", "value": "1.1"}], self.database_snapshot()["metadata"])
+        self.assertEqual([{"key": "schema_version", "value": "1.2"}], self.database_snapshot()["metadata"])
         self.assertTrue(all(set(ADDED_DEFAULTS) <= set(w) for w in self.store.bootstrap()["workers"]))
         self.assertEqual(before["audit"], self.database_snapshot()["audit"])
         self.assertEqual(before["outbox"], self.database_snapshot()["outbox"])
@@ -491,7 +491,7 @@ class StoreTests(unittest.TestCase):
         worker = self.store.save_worker(fictional_worker())["worker"]
         before = self.database_snapshot()
         for field in ADDED_TEXT_FIELDS:
-            maximum = 2000 if field == "ghi_chu_ky_luat" else 8 if field == "nhom_mau" else 200
+            maximum = 2000 if field == "ghi_chu_ky_luat" else 8 if field == "nhom_mau" else 500 if field in {"noi_sinh", "dia_chi", "chi_tiet_noi_o"} else 200
             for value in (None, True, 1, 1.5, [], {}, "x" * (maximum + 1), "Mẫu\x00", "\ud800"):
                 for base in (fictional_worker(), {"id": worker["id"], "version": 1}):
                     with self.subTest(field=field, value=repr(value)[:40], update="id" in base):
@@ -525,10 +525,14 @@ class StoreTests(unittest.TestCase):
             with self.subTest(blood=blood):
                 saved = self.store.save_worker(fictional_worker(nhom_mau=blood))["worker"]
                 self.assertEqual(blood.strip().upper(), saved["nhom_mau"])
+        long_fields = dict.fromkeys(("noi_sinh", "dia_chi", "chi_tiet_noi_o"), "x" * 500)
+        long_worker = self.store.save_worker(fictional_worker(**long_fields))["worker"]
+        self.assertEqual(long_fields, {field: long_worker[field] for field in long_fields})
         before = self.database_snapshot()
         # Uppercasing can expand Unicode characters; the stored value must still fit.
         self.assert_api_error(400, self.store.save_worker, fictional_worker(nhom_mau="ß" * 5))
         self.assert_api_error(400, self.store.save_worker, fictional_worker(ghi_chu_ky_luat="x" * 2001))
+        self.assert_api_error(400, self.store.save_worker, fictional_worker(dia_chi="x" * 501))
         self.assertEqual(before, self.database_snapshot())
 
     def test_ratings_accept_one_through_five_and_null_for_both_fields(self):
@@ -601,7 +605,7 @@ class StoreTests(unittest.TestCase):
             [], None, "text", {}, {"unknown": 1}, fictional_worker(ten_that=" "), fictional_worker(ten_that=12),
             fictional_worker(ten_ho_so=[]), fictional_worker(cmnd=True), fictional_worker(so_dt=None),
             fictional_worker(loai="Other"), fictional_worker(unit_id="OTHER"), fictional_worker(to="Tổ 9"),
-            fictional_worker(gioi_tinh="X"), fictional_worker(quan_he="Bạn"), fictional_worker(phong_o=4),
+            fictional_worker(gioi_tinh="X"), fictional_worker(quan_he="Người lạ"), fictional_worker(phong_o=4),
             fictional_worker(danh_gia_ky_nang=True), fictional_worker(danh_gia_ky_nang=0),
             fictional_worker(danh_gia_dao_duc=6), fictional_worker(danh_gia_dao_duc=1.0),
             fictional_worker(danh_gia_dao_duc="3"), fictional_worker(_manuallyRated=1),
@@ -1078,6 +1082,71 @@ class HTTPTests(unittest.TestCase):
             self.assertNotIn("PRIVATE_SQL_TRACE_SENTINEL", json.dumps(data))
             self.assertNotIn("Traceback", json.dumps(data))
         self.api("GET", "/api/v1/bootstrap")
+
+    def test_worker_image_proxy_serves_only_linked_images(self):
+        worker = self.server.store.bootstrap()["workers"][0]
+        with self.server.store.transaction() as connection:
+            self.server.store.set_worker_image(connection, worker["id"], "photo", "A" * 33)
+        self.assertTrue(self.api("GET", "/api/v1/bootstrap")["images"][worker["id"]]["photo"])
+
+        class FakeDrive:
+            def fetch(self, drive_id):
+                self.asserted = drive_id
+                return b"\x89PNG\r\n\x1a\nfiction", "image/png"
+
+        drive = FakeDrive()
+        self.server.drive = drive
+        self.server.drive_ready = True
+        status, headers, body = self.request("GET", f"/api/v1/workers/{worker['id']}/photo")
+        self.assertEqual(200, status)
+        self.assertEqual("A" * 33, drive.asserted)
+        self.assertEqual("image/png", headers["Content-Type"])
+        self.assertEqual("private, max-age=3600", headers["Cache-Control"])
+        self.assertEqual(b"\x89PNG\r\n\x1a\nfiction", body)
+        self.assertEqual(404, self.request("GET", f"/api/v1/workers/{worker['id']}/cmnd")[0])
+        self.assertEqual(404, self.request("GET", f"/api/v1/workers/{uuid.uuid4()}/photo")[0])
+
+    def test_company_access_code_login_session_and_logout(self):
+        code = "ma-cong-ty-kiem-thu-2026"
+        environment = patch.dict(os.environ, {"CN_ACCESS_CODE": code, "CN_SECRET_KEY": "k" * 64}, clear=False)
+        environment.start()
+        self.addCleanup(environment.stop)
+        server = create_server(port=0, data_dir=self.root / "auth-data", static_root=self.static)
+        thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True)
+        thread.start()
+        self.addCleanup(lambda: (server.shutdown(), server.server_close(), thread.join(timeout=3)))
+        port = server.server_port
+        origin = f"http://127.0.0.1:{port}"
+
+        def call(method, path, payload=None, headers=None):
+            values = {"Host": f"127.0.0.1:{port}"}
+            if payload is not None:
+                values.update({"Origin": origin, "Content-Type": "application/json"})
+            values.update(headers or {})
+            connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+            try:
+                body = json.dumps(payload).encode("utf-8") if payload is not None else None
+                connection.request(method, path, body=body, headers=values)
+                response = connection.getresponse()
+                return response.status, response.getheaders(), response.read()
+            finally:
+                connection.close()
+
+        self.assertEqual(401, call("GET", "/api/v1/bootstrap")[0])
+        status, headers, _ = call("GET", "/")
+        self.assertEqual(302, status)
+        self.assertEqual("/login.html", dict(headers)["Location"])
+        self.assertEqual(401, call("POST", "/api/v1/session", {"code": "sai-ma"})[0])
+        status, headers, content = call("POST", "/api/v1/session", {"code": code})
+        self.assertEqual(200, status)
+        cookie = dict(headers)["Set-Cookie"]
+        self.assertIn("HttpOnly", cookie)
+        self.assertIn("SameSite=Strict", cookie)
+        session = cookie.split(";", 1)[0]
+        self.assertEqual(200, call("GET", "/api/v1/bootstrap", headers={"Cookie": session})[0])
+        self.assertEqual(200, call("DELETE", "/api/v1/session", headers={"Cookie": session})[0])
+        status, headers, _ = call("DELETE", "/api/v1/session", headers={"Cookie": session})
+        self.assertIn("Max-Age=0", dict(headers)["Set-Cookie"])
 
     def test_env_port_data_dir_and_invalid_ports(self):
         with patch.dict(os.environ, {"PORT": "0", "CN_DATA_DIR": str(self.root / "env-data"), "HOST": "0.0.0.0"}):

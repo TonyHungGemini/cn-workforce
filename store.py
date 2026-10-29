@@ -12,7 +12,11 @@ UNITS = ("DSX02", "DSX03", "NMCB")
 KINDS = ("Lao động", "Gia thuộc", "Khác")
 TEAMS = tuple(f"Tổ {i}" for i in range(1, 9))
 GATES = ("Cổng chính", "Cổng khu ở")
-RELATIONSHIPS = ("Chủ hộ", "Vợ/chồng", "Con", "Khác")
+RELATIONSHIPS = (
+    "Chủ hộ", "Vợ", "Chồng", "Vợ/chồng", "Con", "Bố", "Mẹ", "Cha", "Anh", "Chị", "Em",
+    "Cháu", "Bạn", "Con dâu", "Anh rể", "Anh vợ", "Dì", "Bà ngoại", "1 mình", "Khác",
+)
+LONG_TEXT_FIELDS = {"noi_sinh", "dia_chi", "chi_tiet_noi_o"}
 DISCIPLINE_FIELDS = (
     "ghi_chu_ky_luat", "ngay_ky_luat", "hinh_thuc_ky_luat", "trang_thai_ky_luat", "nguoi_lap_bien_ban",
 )
@@ -115,11 +119,11 @@ def check_version(payload, existing):
 
 
 class Store:
-    def __init__(self, data_dir):
+    def __init__(self, data_dir, seed=True):
         self.data_dir = Path(data_dir).expanduser().resolve()
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.db_path = self.data_dir / "demo.sqlite3"
-        self.initialize()
+        self.initialize(seed=seed)
 
     @contextmanager
     def transaction(self, write=True):
@@ -136,7 +140,7 @@ class Store:
         finally:
             connection.close()
 
-    def initialize(self):
+    def initialize(self, seed=True):
         statements = (
             "CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
             "CREATE TABLE IF NOT EXISTS counters (name TEXT PRIMARY KEY, value INTEGER NOT NULL)",
@@ -147,13 +151,15 @@ class Store:
             "CREATE TABLE IF NOT EXISTS visitors (id TEXT PRIMARY KEY, status TEXT NOT NULL, version INTEGER NOT NULL, created_at TEXT NOT NULL, data TEXT NOT NULL)",
             "CREATE TABLE IF NOT EXISTS audit (id TEXT PRIMARY KEY, action TEXT NOT NULL, entity_id TEXT NOT NULL, actor TEXT NOT NULL, at TEXT NOT NULL, summary TEXT NOT NULL)",
             "CREATE TABLE IF NOT EXISTS outbox (event_id TEXT PRIMARY KEY, entity_id TEXT NOT NULL, person_id TEXT NOT NULL, unit_id TEXT NOT NULL, entity_version INTEGER NOT NULL, event_type TEXT NOT NULL, occurred_at TEXT NOT NULL, status TEXT NOT NULL)",
+            "CREATE TABLE IF NOT EXISTS worker_images (worker_id TEXT NOT NULL REFERENCES workers(id) ON DELETE CASCADE, kind TEXT NOT NULL, drive_id TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY(worker_id, kind))",
+            "CREATE TABLE IF NOT EXISTS legacy_links (legacy_id INTEGER PRIMARY KEY, worker_id TEXT NOT NULL UNIQUE REFERENCES workers(id))",
         )
         with self.transaction() as connection:
             for statement in statements:
                 connection.execute(statement)
             version = connection.execute("SELECT value FROM metadata WHERE key = 'schema_version'").fetchone()
             if version:
-                if version["value"] not in {"1.0", "1.1"}:
+                if version["value"] not in {"1.0", "1.1", "1.2"}:
                     raise RuntimeError("Unsupported demo database version")
                 if version["value"] == "1.0":
                     # Backfill JSON only: identities, versions, history and outbox stay untouched.
@@ -163,10 +169,13 @@ class Store:
                             worker.setdefault(field, default)
                         connection.execute("UPDATE workers SET data = ? WHERE id = ?", (encode(worker), row["id"]))
                     connection.execute("UPDATE metadata SET value = '1.1' WHERE key = 'schema_version'")
+                if version["value"] in {"1.0", "1.1"}:
+                    connection.execute("UPDATE metadata SET value = '1.2' WHERE key = 'schema_version'")
                 return
             connection.execute("INSERT INTO counters(name, value) VALUES ('person', 0)")
-            self._seed(connection)
-            connection.execute("INSERT INTO metadata(key, value) VALUES ('schema_version', '1.1')")
+            if seed:
+                self._seed(connection)
+            connection.execute("INSERT INTO metadata(key, value) VALUES ('schema_version', '1.2')")
 
     def _next_person(self, connection):
         connection.execute("UPDATE counters SET value = value + 1 WHERE name = 'person'")
@@ -246,8 +255,10 @@ class Store:
 
     def bootstrap(self):
         with self.transaction(write=False) as connection:
+            dataset = connection.execute("SELECT value FROM metadata WHERE key = 'dataset'").fetchone()
+            imported = dataset is not None and dataset["value"] == "dsx02"
             return {
-                "ok": True, "mode": "demo",
+                "ok": True, "mode": "imported" if imported else "demo",
                 "directory": {
                     "units": [
                         {"id": "DSX02", "name": "Đội sản xuất 02"},
@@ -262,8 +273,43 @@ class Store:
                 "visitors": [json.loads(row["data"]) for row in connection.execute("SELECT data FROM visitors ORDER BY created_at DESC, rowid DESC")],
                 "audit": [dict(row) for row in connection.execute("SELECT * FROM audit ORDER BY at DESC, rowid DESC")],
                 "outbox": [dict(row) for row in connection.execute("SELECT * FROM outbox ORDER BY occurred_at DESC, rowid DESC")],
-                "meta": {"source": "Dữ liệu minh họa", "integration": "disconnected"},
+                "images": self._image_index(connection),
+                "meta": {
+                    "source": "Dữ liệu ĐSX02" if imported else "Dữ liệu minh họa",
+                    "integration": "disconnected",
+                },
             }
+
+    def _image_index(self, connection):
+        index = {}
+        for row in connection.execute("SELECT worker_id, kind FROM worker_images"):
+            index.setdefault(row["worker_id"], {})[row["kind"]] = True
+        return index
+
+    def worker_image(self, worker_id, kind):
+        if kind not in ("photo", "cmnd"):
+            raise APIError(404, "Không tìm thấy ảnh.")
+        with self.transaction(write=False) as connection:
+            row = connection.execute("SELECT drive_id FROM worker_images WHERE worker_id = ? AND kind = ?",
+                                     (worker_id, kind)).fetchone()
+            if row is None:
+                raise APIError(404, "Hồ sơ chưa có ảnh này.")
+            return row["drive_id"]
+
+    def link_legacy(self, connection, legacy_id, worker_id):
+        connection.execute("INSERT OR REPLACE INTO legacy_links(legacy_id, worker_id) VALUES (?, ?)",
+                           (legacy_id, worker_id))
+
+    def set_worker_image(self, connection, worker_id, kind, drive_id):
+        if kind not in ("photo", "cmnd"):
+            raise ValueError("Unsupported image kind")
+        if not drive_id:
+            connection.execute("DELETE FROM worker_images WHERE worker_id = ? AND kind = ?", (worker_id, kind))
+            return
+        connection.execute(
+            "INSERT OR REPLACE INTO worker_images(worker_id, kind, drive_id, updated_at) VALUES (?, ?, ?, ?)",
+            (worker_id, kind, drive_id, timestamp()),
+        )
 
     def _worker(self, connection, worker_id):
         row = connection.execute("SELECT data FROM workers WHERE id = ?", (worker_id,)).fetchone()
@@ -275,7 +321,8 @@ class Store:
         for field in ("ten_that", "ten_ho_so", "phong_o", "so_dt", "cmnd", "noi_sinh", "khu_vuc",
                       "phan_cay", "so_bao_hiem", "chi_tiet_noi_o", "dia_chi", "hinh_thuc_ky_luat",
                       "trang_thai_ky_luat", "nguoi_lap_bien_ban"):
-            worker[field] = text(worker[field], field, required=field == "ten_that")
+            worker[field] = text(worker[field], field, required=field == "ten_that",
+                                 maximum=500 if field in LONG_TEXT_FIELDS else 200)
         for field in ("ghi_chu", "ghi_chu_ky_luat"):
             worker[field] = text(worker[field], field, maximum=2000)
         worker["nhom_mau"] = text(worker["nhom_mau"], "nhom_mau").upper()

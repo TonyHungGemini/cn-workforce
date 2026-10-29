@@ -41,7 +41,7 @@ const routes = [
   ['overview','Tổng quan công ty','overview'],['security','Kiểm soát an ninh','shield'],['visitors','Khách & Nhà thầu','visitors'],
   ['reports','Báo cáo & Thống kê','chart'],['integration','Tích hợp App mẹ','link'],['roadmap','Sơ đồ & Lộ trình','map'],
 ];
-const state = {data:null,unit:'all',query:'',type:'all',team:'all',status:'active',room:'',missing:false,blood:'all',quality:'all',page:1,disciplineQuery:'',disciplineStatus:'all'};
+const state = {data:null,unit:'all',query:'',type:'all',team:'all',status:'active',room:'',missing:false,blood:'all',quality:'all',page:1,disciplineQuery:'',disciplineStatus:'all',session:null};
 const main = document.getElementById('main');
 const dialog = document.getElementById('dialog');
 const pageSize = 10;
@@ -60,6 +60,30 @@ const ethicsLabels = ['Chưa chấm','Cần chấn chỉnh','Vi phạm nhắc nh
 const disciplineStatuses = ['Cần chấn chỉnh','Đang theo dõi','Đang đào tạo lại','Đã có tiến bộ','Đã khắc phục xong (Đạt chuẩn)'];
 const disciplineActions = ['Nhắc nhở','Khiển trách','Cảnh cáo','Đào tạo lại tay nghề','Đình chỉ tạm thời','Chuyển tổ kiểm điểm','Khác'];
 const isBorrowedName = w => Boolean(w.ten_that && w.ten_ho_so && normalize(w.ten_that.trim()) !== normalize(w.ten_ho_so.trim()));
+const hasImage = (w,kind) => Boolean(state.data?.images?.[w.id]?.[kind]);
+function avatarMarkup(w,cls='avatar') {
+  const initials=esc(w.person_id.slice(-2));
+  if (!hasImage(w,'photo')) return `<span class="${cls}">${initials}</span>`;
+  return `<span class="${cls} avatar-photo"><img class="avatar-img" src="/api/v1/workers/${encodeURIComponent(w.id)}/photo" alt="" loading="lazy" decoding="async" data-initials="${initials}"></span>`;
+}
+document.addEventListener('error', e => {
+  const img=e.target;
+  if (!(img instanceof HTMLImageElement)) return;
+  if (img.classList.contains('id-photo-img')) {
+    const button=img.closest('.id-photo');
+    if (button) {
+      button.disabled=true;
+      button.classList.add('image-missing');
+      img.replaceWith(Object.assign(document.createElement('span'),{className:'image-fallback',textContent:'Ảnh chưa tải được'}));
+    }
+    return;
+  }
+  if (!img.classList.contains('avatar-img')) return;
+  const host=img.parentElement, span=document.createElement('span');
+  span.className=host.className.replace(' avatar-photo','');
+  span.textContent=img.dataset.initials||'';
+  host.replaceWith(span);
+}, true);
 const needsReview = w => w.loai !== 'Gia thuộc' && Boolean((w._manuallyRated && ((w.danh_gia_ky_nang !== null && w.danh_gia_ky_nang <= 2) || (w.danh_gia_dao_duc !== null && w.danh_gia_dao_duc <= 2))) || w.ghi_chu_ky_luat || w.ngay_ky_luat || w.hinh_thuc_ky_luat || w.trang_thai_ky_luat);
 function ageAt(birth,now=new Date()) {
   if (!birth) return '';
@@ -90,6 +114,10 @@ function toast(message) {
 }
 async function api(path,body) {
   const response = await fetch(`/api/v1/${path}`, body === undefined ? {cache:'no-store'} : {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  if (response.status === 401) {
+    location.href = `/login.html?next=${encodeURIComponent(location.pathname + location.search + location.hash)}`;
+    throw new Error('Phiên đăng nhập đã hết hạn.');
+  }
   let data;
   try { data = await response.json(); } catch { throw new Error('Máy chủ không trả về dữ liệu hợp lệ. Hãy thử tải lại.'); }
   if (!response.ok || data.ok === false) throw new Error(data.error || 'Không thể hoàn tất thao tác.');
@@ -97,10 +125,12 @@ async function api(path,body) {
 }
 async function refresh() {
   state.data = await api('bootstrap');
+  state.session = await api('session').catch(() => null);
   units = Object.fromEntries(state.data.directory.units.map(unit=>[unit.id,unit.name]));
   teams = state.data.directory.teams;
   document.getElementById('unit-select').innerHTML = selectOptions([['all','Toàn công ty'],...Object.entries(units)],state.unit);
   render();
+  syncChrome();
 }
 function go(route) { if(currentRoute() === route) render(); else location.hash = route; }
 function resetOcr() {
@@ -117,7 +147,7 @@ function showModal(title,content,footer='') {
 function closeModal() { dialog.close(); }
 dialog.addEventListener('close', () => { resetOcr(); if (opener?.isConnected) opener.focus(); });
 dialog.addEventListener('click', e => { if(e.target === dialog){const r=dialog.getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom) closeModal();} });
-function personCell(w) { return `<div class="person-cell"><span class="avatar">${esc(w.person_id.slice(-2))}</span><button class="person-link" data-action="detail" data-id="${esc(w.id)}"><b>${esc(w.ten_that)}</b><small>${esc(w.person_id)} · ${esc(w.unit_id)}</small></button></div>`; }
+function personCell(w) { return `<div class="person-cell">${avatarMarkup(w)}<button class="person-link" data-action="detail" data-id="${esc(w.id)}"><b>${esc(w.ten_that)}</b><small>${esc(w.person_id)} · ${esc(w.unit_id)}</small></button></div>`; }
 function profileStatus(w) { return w.status === 'archived' ? badge('Đã lưu trữ','gray') : w.cmnd ? badge('Có thông tin giấy tờ') : badge('Thiếu giấy tờ','amber'); }
 function typeBadge(type) { return badge(type,type === 'Gia thuộc' ? 'blue' : type === 'Khác' ? 'gray' : ''); }
 function isInside(id) {
@@ -150,7 +180,7 @@ function overview() {
   const date = new Intl.DateTimeFormat('vi-VN',{weekday:'long',day:'numeric',month:'long',year:'numeric'}).format(new Date());
   return heading('Tổng quan vận hành',`Chào bạn, cùng nắm bắt tình hình đơn vị hôm nay.`,button('<span class="export-label">Xuất báo cáo</span>','export-workers','download','secondary')+button('Thêm hồ sơ','new-worker','plus'))+
   `<div class="hero-grid"><section class="hero"><div class="eyebrow">C.R.C.K.2 APHIVATH · NỀN TẢNG QUẢN LÝ CON NGƯỜI</div><h2>Hiểu con người.<br>An tâm vận hành.</h2><p>Một không gian cho công nhân, nơi ở và an ninh.<br>Kế thừa ĐSX02, sẵn sàng cho chặng đường mới.</p><a class="hero-link" href="#roadmap">Khám phá lộ trình phát triển ${icon('arrow')}</a><span class="hero-stamp">BẢN THIẾT KẾ 01</span></section><section class="integration-card"><div class="integration-top">${icon('link')} HỆ SINH THÁI PHẦN MỀM</div><h3>Độc lập vận hành.<br>Thống nhất dữ liệu.</h3><p>Kết nối PM Quản trị hợp nhất<br>qua định danh và API dùng chung.</p><a class="button" href="#integration">Xem thiết kế kết nối ${icon('arrow')}</a></section></div>`+
-  metrics()+`<div class="dashboard-grid">${composition()}${attention()}</div><section class="panel"><div class="panel-heading"><div><h2>Hồ sơ gần đây</h2><p>${esc(date)} · ${unitLabel()}</p></div><a class="button text-button" href="#workers">Xem tất cả ${icon('arrow')}</a></div>${workerTable([...activeWorkers()].sort((a,b)=>b.updated_at.localeCompare(a.updated_at)).slice(0,5),true)}<div class="table-footer"><span>Hiển thị ${Math.min(activeWorkers().length,5)} / ${activeWorkers().length} hồ sơ đang hoạt động</span><span>Dữ liệu minh họa, không phải hồ sơ thật</span></div></section>`;
+  metrics()+`<div class="dashboard-grid">${composition()}${attention()}</div><section class="panel"><div class="panel-heading"><div><h2>Hồ sơ gần đây</h2><p>${esc(date)} · ${unitLabel()}</p></div><a class="button text-button" href="#workers">Xem tất cả ${icon('arrow')}</a></div>${workerTable([...activeWorkers()].sort((a,b)=>b.updated_at.localeCompare(a.updated_at)).slice(0,5),true)}<div class="table-footer"><span>Hiển thị ${Math.min(activeWorkers().length,5)} / ${activeWorkers().length} hồ sơ đang hoạt động</span><span>${esc(dataCaption())}</span></div></section>`;
 }
 function filteredWorkers() {
   return scoped(state.data.workers).filter(w => (state.status==='all'||w.status===state.status) && (state.type==='all'||w.loai===state.type) && (state.team==='all'||w.to===state.team) && (!state.room||w.phong_o===state.room) && (!state.missing||!w.cmnd) && (state.blood==='all'||(state.blood==='unknown'?!w.nhom_mau:w.nhom_mau===state.blood)) &&
@@ -164,7 +194,7 @@ function ratingText(w,field) {
 function workerList(list) {
   if (!list.length) return empty('Chưa tìm thấy hồ sơ','Thử tên không dấu, số giấy tờ hoặc bỏ bớt bộ lọc.');
   return `<ul class="worker-list">${list.map(w=>`<li class="worker-row">
-    <div class="worker-identity"><span class="avatar">${esc(w.person_id.slice(-2))}</span><div><button class="person-link" data-action="detail" data-id="${esc(w.id)}"><b>${esc(w.ten_that)}</b></button><small>${esc(w.person_id)} · ${esc(w.unit_id)}</small>${isBorrowedName(w)?`<small>Tên hồ sơ: ${esc(w.ten_ho_so)}</small>`:''}<div class="worker-tags">${typeBadge(w.loai)}${w.chu_phong?badge('Chủ phòng','blue'):''}${!w.cmnd?badge('Thiếu CMND','amber'):''}${w.status==='archived'?badge('Đã lưu trữ','gray'):''}</div></div></div>
+    <div class="worker-identity">${avatarMarkup(w)}<div><button class="person-link" data-action="detail" data-id="${esc(w.id)}"><b>${esc(w.ten_that)}</b></button><small>${esc(w.person_id)} · ${esc(w.unit_id)}</small>${isBorrowedName(w)?`<small>Tên hồ sơ: ${esc(w.ten_ho_so)}</small>`:''}<div class="worker-tags">${typeBadge(w.loai)}${w.chu_phong?badge('Chủ phòng','blue'):''}${!w.cmnd?badge('Thiếu CMND','amber'):''}${w.status==='archived'?badge('Đã lưu trữ','gray'):''}</div></div></div>
     <div class="worker-location"><b>${esc(units[w.unit_id]||w.unit_id)}</b><small>${esc(w.to)} · ${w.phong_o?`Phòng ${esc(w.phong_o)}`:'Chưa bố trí phòng'}</small><small>${w.phan_cay?`Phần cây ${esc(w.phan_cay)}`:w.khu_vuc?esc(w.khu_vuc):'Chưa cập nhật khu vực'}</small></div>
     <div class="worker-contact"><b>${esc(w.so_dt||'Chưa có điện thoại')}</b><small>Nhóm máu: ${esc(w.nhom_mau||'Chưa xác định')}</small></div>
     <div class="worker-ratings"><small>Kỹ năng <b>${ratingText(w,'danh_gia_ky_nang')}</b></small><small>Kỷ luật <b>${ratingText(w,'danh_gia_dao_duc')}</b></small>${needsReview(w)?badge('Có mục theo dõi','amber'):''}</div>
@@ -184,7 +214,7 @@ function workers() {
   </section>
   <div class="directory-summary"><button data-action="quick-filter" data-filter="all"><b>${active.length}</b> Tổng hồ sơ</button><button data-action="quick-filter" data-filter="Lao động"><b>${active.filter(w=>w.loai==='Lao động').length}</b> Lao động</button><button data-action="quick-filter" data-filter="Gia thuộc"><b>${active.filter(w=>w.loai==='Gia thuộc').length}</b> Gia thuộc</button><button data-action="missing"><b>${active.filter(w=>!w.cmnd).length}</b> Thiếu CMND</button><button data-action="open-discipline"><b>${active.filter(needsReview).length}</b> Cần theo dõi</button></div>
   <section class="panel directory-panel"><div class="filters"><select id="type-filter" aria-label="Loại hồ sơ">${selectOptions([['all','Tất cả phân loại'],['Lao động','Lao động'],['Gia thuộc','Gia thuộc'],['Khác','Khác']],state.type)}</select><select id="team-filter" aria-label="Tổ lao động">${selectOptions([['all','Tất cả tổ'],...teams.map(t=>[t,t])],state.team)}</select><select id="blood-filter" aria-label="Nhóm máu">${selectOptions([['all','Nhóm máu: tất cả'],['unknown','Chưa rõ nhóm máu'],...bloodTypes.map(t=>[t,t])],state.blood)}</select><select id="quality-filter" aria-label="Thông tin cần lọc">${selectOptions([['all','Thông tin: tất cả'],['borrowed','Có tên hồ sơ khác'],['phone','Có điện thoại'],['unrated','Chưa đánh giá'],['review','Có mục theo dõi']],state.quality)}</select><select id="status-filter" aria-label="Trạng thái hồ sơ">${selectOptions([['active','Đang hoạt động'],['archived','Đã lưu trữ'],['all','Tất cả trạng thái']],state.status)}</select>${button('Bỏ lọc','reset-filters',null,'secondary')}</div><div id="workers-results" aria-live="polite">${workersResults()}</div></section>
-  <p class="demo-caption">Dữ liệu minh họa · ${Object.keys(units).length} đơn vị mẫu, không phải toàn bộ danh mục công ty · Không nhập thông tin cá nhân thật.</p>`;
+  <p class="demo-caption">${isImported()?`${dataCaption()} · ${active.length} hồ sơ đang hoạt động.`:`Dữ liệu minh họa · ${Object.keys(units).length} đơn vị mẫu, không phải toàn bộ danh mục công ty · Không nhập thông tin cá nhân thật.`}</p>`;
 }
 function disciplineWorkers() {
   return activeWorkers().filter(w=>needsReview(w) && (state.disciplineStatus==='all'||w.trang_thai_ky_luat===state.disciplineStatus) && (matchesWorker(w,state.disciplineQuery)||normalize([w.ghi_chu_ky_luat,w.nguoi_lap_bien_ban,w.hinh_thuc_ky_luat].join(' ')).includes(normalize(state.disciplineQuery.trim()))));
@@ -202,7 +232,7 @@ function rooms() {
   const rooms=scoped(state.data.rooms);
   return heading('Cư trú & Gia thuộc','Quản lý phòng ở, nhân khẩu và sức chứa theo từng đơn vị.',button('Xuất cư trú','export-rooms','download','secondary'),'KHÔNG GIAN SỐNG')+
   `<div class="metrics">${metric('Phòng đang có người',rooms.filter(r=>occupancy(r)>0).length,`/ ${rooms.length}`,'Theo hồ sơ đang hoạt động','home')}${metric('Tổng người cư trú',activeWorkers().filter(w=>w.phong_o).length,'người','Bao gồm lao động & gia thuộc','people')}${metric('Phòng vượt sức chứa',rooms.filter(r=>occupancy(r)>r.capacity).length,'phòng','Cần kiểm tra và điều chỉnh','warning')}${metric('Chưa bố trí phòng',activeWorkers().filter(w=>!w.phong_o).length,'người','Theo trường thông tin phòng ở','file')}</div>`+
-  notice('Sức chứa trong demo là cấu hình minh họa. Số người cùng phòng không tự động đồng nghĩa với quan hệ gia đình.',true)+
+  notice(isImported()?'Sức chứa được suy ra từ dữ liệu nhập (tối thiểu 6 chỗ/phòng), không phải sức chứa thực tế. Số người cùng phòng không tự động đồng nghĩa với quan hệ gia đình.':'Sức chứa trong demo là cấu hình minh họa. Số người cùng phòng không tự động đồng nghĩa với quan hệ gia đình.',true)+
   `<section class="panel"><div class="panel-heading"><div><h2>Sơ đồ phòng ở</h2><p>Chọn một phòng để xem danh sách cư trú</p></div>${badge(`${rooms.length} phòng`,'gray')}</div><div class="room-grid">${rooms.map(r=>{const n=occupancy(r), over=n>r.capacity;return `<button class="room-card ${over?'over':''}" data-action="room-detail" data-id="${esc(r.id)}"><div class="room-card-head"><h3>${esc(r.id)}</h3>${icon('home')}</div><p>${esc(units[r.unit_id])}</p>${badge(over?'Vượt sức chứa':n===0?'Phòng trống':'Đang sử dụng',over?'amber':n===0?'gray':'')}<div class="occupancy-bar"><span style="width:${Math.min(100,n/r.capacity*100)}%"></span></div><small>${n} người / ${r.capacity} chỗ · Xem hồ sơ →</small></button>`;}).join('')}</div></section>`;
 }
 function eventTable(events) {
@@ -260,12 +290,30 @@ function render() {
   document.getElementById('breadcrumb').textContent=routes.find(r=>r[0]===route)[1];
   document.title=`${routes.find(r=>r[0]===route)[1]} · CN Workforce`;
   document.getElementById('primary-nav').innerHTML=routes.map(([key,label,ico],i)=>`${i===7?'<div class="nav-separator">HỆ THỐNG & PHÁT TRIỂN</div>':''}<a class="nav-item ${key===route?'active':''}" href="#${key}" ${key===route?'aria-current="page"':''}>${icon(ico)}<span>${label}</span>${key==='workers'?`<span class="nav-count">${activeWorkers().length}</span>`:''}</a>`).join('');
+  const tabs=[['workers','Tra cứu','people'],['overview','Tổng quan','overview'],['discipline','Đánh giá','star'],['rooms','Cư trú','home'],['security','An ninh','shield']];
+  document.getElementById('mobile-tabs').innerHTML=tabs.map(([key,label,ico])=>`<a href="#${key}" class="${key===route?'active':''}" ${key===route?'aria-current="page"':''}>${icon(ico)}<span>${label}</span></a>`).join('');
   main.innerHTML=({overview,workers,discipline,rooms,security,visitors,reports,integration,roadmap}[route])();
 }
-function field(label,name,value='',type='text',required=false,full=false,attrs='') {
-  return `<label class="form-field ${full?'full':''}">${label}${required?' *':''}<input type="${type}" name="${name}" value="${esc(value)}" ${required?'required':''} maxlength="200" ${attrs}></label>`;
+function syncChrome() {
+  const cloud=Boolean(state.session?.cloud);
+  const footer=document.getElementById('footer-status');
+  if(footer) footer.innerHTML=`<i class="status-dot ${cloud?'':'amber'}"></i>${cloud?'Máy chủ công ty · dữ liệu thật':'Bản cục bộ · chưa kết nối App mẹ'}`;
+  const label=document.getElementById('session-label');
+  if(label) label.innerHTML=cloud?'Phiên công ty<small>Đã đăng nhập · xem toàn công ty</small>':'Quản trị demo<small>Phiên cục bộ · chưa phân quyền</small>';
+  const logout=document.getElementById('logout-button');
+  if(logout) logout.hidden=!state.session?.required;
+}
+function field(label,name,value='',type='text',required=false,full=false,attrs='',maximum=200) {
+  return `<label class="form-field ${full?'full':''}">${label}${required?' *':''}<input type="${type}" name="${name}" value="${esc(value)}" ${required?'required':''} maxlength="${maximum}" ${attrs}></label>`;
 }
 function selectField(label,name,options,value,full=false) { return `<label class="form-field ${full?'full':''}">${label}<select name="${name}">${selectOptions(options,value)}</select></label>`; }
+const relationships = ['Chủ hộ','Vợ','Chồng','Vợ/chồng','Con','Bố','Mẹ','Cha','Anh','Chị','Em','Cháu','Bạn','Con dâu','Anh rể','Anh vợ','Dì','Bà ngoại','1 mình','Khác'];
+function relationshipOptions(value) { return (value && !relationships.includes(value) ? [value,...relationships] : relationships).map(v=>[v,v]); }
+function isImported() { return Boolean(state.data && state.data.mode === 'imported'); }
+function dataCaption() {
+  if (state.session?.cloud) return 'Dữ liệu công ty trên máy chủ nội bộ · chỉ chia sẻ trong công ty';
+  return isImported() ? 'Dữ liệu ĐSX02 nhập cục bộ · chỉ lưu trên máy này' : 'Dữ liệu minh họa, không phải hồ sơ thật';
+}
 function roomOptions(unit) { return [['','Chưa bố trí'],...state.data.rooms.filter(r=>r.unit_id===unit).map(r=>[r.id,`${r.id} · ${occupancy(r)}/${r.capacity} người`])]; }
 function ratingGroup(label,name,value,labels) {
   return `<fieldset class="rating-group"><legend>${label}</legend><div class="rating-choices">${['',1,2,3,4,5].map(n=>`<label title="${esc(labels[Number(n)])}"><input type="radio" name="${name}" value="${n}" ${(value??'')===n?'checked':''}><span>${n===''?'Chưa chấm':`${n}${icon('star')}`}</span></label>`).join('')}</div><small>1 · ${labels[1]} / 3 · Đạt yêu cầu / 5 · ${labels[5]}</small></fieldset>`;
@@ -273,10 +321,10 @@ function ratingGroup(label,name,value,labels) {
 function workerForm(id,scan=false) {
   const w=state.data.workers.find(w=>w.id===id) || {loai:'Lao động',unit_id:state.unit==='all'?'':state.unit,to:teams[0],quan_he:'Khác',gioi_tinh:'',phong_o:'',danh_gia_ky_nang:3,danh_gia_dao_duc:3,_manuallyRated:false};
   showModal(id?'Chỉnh sửa hồ sơ công nhân':'Thêm hồ sơ công nhân',`<form id="worker-form" data-id="${esc(id||'')}" data-version="${w.version||''}"><div class="dialog-body">
-    <p class="form-note">Phạm vi toàn công ty · Chọn đúng đơn vị quản lý. Chỉ sử dụng thông tin và ảnh minh họa.</p>
+    <p class="form-note">Phạm vi toàn công ty · Chọn đúng đơn vị quản lý. ${isImported()?'Dữ liệu nội bộ đã nhập từ ĐSX02.':'Chỉ sử dụng thông tin và ảnh minh họa.'}</p>
     <details class="ocr-panel" id="ocr-panel" ${scan?'open':''}><summary>${icon('file')}Quét CMND / CCCD · Điền nhanh hồ sơ<span>Trên máy</span></summary><div class="ocr-body"><p>Ảnh chỉ được đọc trong trình duyệt, không gửi lên máy chủ hay AI bên ngoài. Kết quả cần kiểm tra; không tự xác thực danh tính.</p><div class="ocr-toolbar"><label class="form-field">Chọn ảnh minh họa<input id="ocr-file" type="file" accept="image/png,image/jpeg,image/webp"></label><label class="form-field">Ngôn ngữ đọc<select id="ocr-language"><option value="eng">Chữ Latin / MRZ</option><option value="vie+eng">Tiếng Việt + Latin</option><option value="khm+eng">Tiếng Khmer + Latin</option></select></label></div><p class="form-note">PNG, JPEG, WebP · Tối đa 10 MB. Khmer không được tự dịch sang tiếng Việt. Ảnh không lưu kèm hồ sơ.</p><div class="ocr-controls">${button('Đọc ảnh trên máy','ocr-read','file','primary','type="button" disabled')}${button('Dừng đọc','ocr-cancel',null,'secondary','type="button" hidden')}<a href="assets/ocr-sample.png" download="anh-mau-quyet-cmnd.png" class="button secondary">Tải ảnh mẫu</a></div><img id="ocr-preview" alt="Ảnh minh họa đang đối chiếu" hidden><p id="ocr-status" role="status" aria-live="polite">Chọn ảnh để bắt đầu.</p><div id="ocr-results"></div></div></details>
-    <h3 class="form-section-title">01 · Danh tính & liên hệ</h3><div class="form-grid">${field('Tên thật / tên hiển thị','ten_that',w.ten_that,'text',true)}${field('Tên trên hồ sơ','ten_ho_so',w.ten_ho_so)}${field('Số CMND / CCCD','cmnd',w.cmnd)}${field('Điện thoại / liên hệ','so_dt',w.so_dt,'tel')}${field('Ngày sinh','ngay_sinh',w.ngay_sinh,'date',false,false,`max="${today()}"`)}${selectField('Giới tính','gioi_tinh',[['','Chưa cập nhật'],['M','Nam'],['F','Nữ']],w.gioi_tinh)}${field('Nơi sinh','noi_sinh',w.noi_sinh)}<label class="form-field">Tuổi (tính theo ngày sinh)<input id="worker-age" readonly value="${ageAt(w.ngay_sinh)}" placeholder="Chưa có ngày sinh"></label>${field('Địa chỉ thường trú','dia_chi',w.dia_chi,'text',false,true)}</div>
-    <h3 class="form-section-title">02 · Đơn vị, lao động & cư trú</h3><div class="form-grid">${selectField('Đơn vị quản lý *','unit_id',[['','Chọn đơn vị'],...Object.entries(units)],w.unit_id)}${selectField('Phân loại','loai',[['Lao động','Lao động'],['Gia thuộc','Gia thuộc'],['Khác','Khác']],w.loai)}${selectField('Tổ','to',teams.map(t=>[t,t]),w.to)}${field('Khu vực','khu_vuc',w.khu_vuc)}${field('Phần cây hiện tại','phan_cay',w.phan_cay)}${field('Số bảo hiểm','so_bao_hiem',w.so_bao_hiem)}${selectField('Phòng ở','phong_o',roomOptions(w.unit_id),w.phong_o)}${selectField('Quan hệ cư trú','quan_he',[['Chủ hộ','Chủ hộ'],['Vợ/chồng','Vợ/chồng'],['Con','Con'],['Khác','Khác']],w.quan_he)}${field('Chi tiết nơi ở','chi_tiet_noi_o',w.chi_tiet_noi_o,'text',false,true)}<label class="check-field full"><input type="checkbox" name="chu_phong" ${w.chu_phong?'checked':''}> Là chủ phòng / đầu mối phòng ở</label></div>
+    <h3 class="form-section-title">01 · Danh tính & liên hệ</h3><div class="form-grid">${field('Tên thật / tên hiển thị','ten_that',w.ten_that,'text',true)}${field('Tên trên hồ sơ','ten_ho_so',w.ten_ho_so)}${field('Số CMND / CCCD','cmnd',w.cmnd)}${field('Điện thoại / liên hệ','so_dt',w.so_dt,'tel')}${field('Ngày sinh','ngay_sinh',w.ngay_sinh,'date',false,false,`max="${today()}"`)}${selectField('Giới tính','gioi_tinh',[['','Chưa cập nhật'],['M','Nam'],['F','Nữ']],w.gioi_tinh)}${field('Nơi sinh','noi_sinh',w.noi_sinh,'text',false,false,'',500)}<label class="form-field">Tuổi (tính theo ngày sinh)<input id="worker-age" readonly value="${ageAt(w.ngay_sinh)}" placeholder="Chưa có ngày sinh"></label>${field('Địa chỉ thường trú','dia_chi',w.dia_chi,'text',false,true,'',500)}</div>
+    <h3 class="form-section-title">02 · Đơn vị, lao động & cư trú</h3><div class="form-grid">${selectField('Đơn vị quản lý *','unit_id',[['','Chọn đơn vị'],...Object.entries(units)],w.unit_id)}${selectField('Phân loại','loai',[['Lao động','Lao động'],['Gia thuộc','Gia thuộc'],['Khác','Khác']],w.loai)}${selectField('Tổ','to',teams.map(t=>[t,t]),w.to)}${field('Khu vực','khu_vuc',w.khu_vuc)}${field('Phần cây hiện tại','phan_cay',w.phan_cay)}${field('Số bảo hiểm','so_bao_hiem',w.so_bao_hiem)}${selectField('Phòng ở','phong_o',roomOptions(w.unit_id),w.phong_o)}${selectField('Quan hệ cư trú','quan_he',relationshipOptions(w.quan_he),w.quan_he)}${field('Chi tiết nơi ở','chi_tiet_noi_o',w.chi_tiet_noi_o,'text',false,true,'',500)}<label class="check-field full"><input type="checkbox" name="chu_phong" ${w.chu_phong?'checked':''}> Là chủ phòng / đầu mối phòng ở</label></div>
     <h3 class="form-section-title">03 · Nhóm máu</h3><div class="form-grid"><label class="form-field">Nhóm máu<input name="nhom_mau" list="blood-types" value="${esc(w.nhom_mau)}" maxlength="8" placeholder="Chưa xác định"><datalist id="blood-types">${['O','A','B','AB','O+','O-','A+','A-','B+','B-','AB+','AB-','RH-'].map(v=>`<option value="${v}">`).join('')}</datalist></label><p class="form-note">Chỉ ghi theo thông tin đã đối chiếu. Không suy ra từ CMND; không dùng trường này thay cho xét nghiệm y tế.</p></div>
     <h3 class="form-section-title">04 · Kỹ năng & Đạo đức – Kỷ luật</h3>${selectField('Trạng thái đánh giá','_manuallyRated',[['false','Chưa đánh giá · mức mặc định 3/5'],['true','Đã có đánh giá của người quản lý']],String(Boolean(w._manuallyRated)))}<p id="dependent-note" class="form-note" ${w.loai==='Gia thuộc'?'':'hidden'}>Gia thuộc không chấm sao hoặc ghi nhận kỷ luật.</p><fieldset id="evaluation-fields" class="plain-fieldset">${ratingGroup('Kỹ năng lao động','danh_gia_ky_nang',w.danh_gia_ky_nang,skillLabels)}${ratingGroup('Đạo đức & Kỷ luật','danh_gia_dao_duc',w.danh_gia_dao_duc,ethicsLabels)}</fieldset>
     <fieldset id="discipline-fields" class="plain-fieldset"><legend>Ghi nhận theo dõi / đào tạo / kỷ luật</legend><div class="form-grid">${field('Ngày ghi nhận','ngay_ky_luat',w.ngay_ky_luat,'date',false,false,`max="${today()}"`)}${selectField('Hình thức xử lý','hinh_thuc_ky_luat',[['','Chưa chọn'],...disciplineActions.map(s=>[s,s])],w.hinh_thuc_ky_luat||'')}${selectField('Trạng thái theo dõi','trang_thai_ky_luat',[['','Chưa ghi nhận'],...disciplineStatuses.map(s=>[s,s])],w.trang_thai_ky_luat||'')}${field('Cán bộ / quản lý phụ trách','nguoi_lap_bien_ban',w.nguoi_lap_bien_ban)}<label class="form-field full">Nội dung ghi nhận / kế hoạch đào tạo<textarea name="ghi_chu_ky_luat" maxlength="2000">${esc(w.ghi_chu_ky_luat)}</textarea></label></div></fieldset>
@@ -295,16 +343,28 @@ function syncWorkerControls() {
   form.elements.chu_phong.disabled=dependent||!form.elements.phong_o.value;
   if (form.elements.chu_phong.disabled) form.elements.chu_phong.checked=false;
 }
+function idPhotos(w) {
+  const items=[];
+  if(hasImage(w,'photo')) items.push(`<button class="id-photo" data-action="open-image" data-id="${esc(w.id)}" data-kind="photo"><img class="id-photo-img" src="/api/v1/workers/${encodeURIComponent(w.id)}/photo" alt="Chân dung ${esc(w.ten_that)}" loading="lazy" decoding="async"><span>${icon('people')}Chân dung</span></button>`);
+  if(hasImage(w,'cmnd')) items.push(`<button class="id-photo" data-action="open-image" data-id="${esc(w.id)}" data-kind="cmnd"><img class="id-photo-img" src="/api/v1/workers/${encodeURIComponent(w.id)}/cmnd" alt="Ảnh giấy tờ của ${esc(w.ten_that)}" loading="lazy" decoding="async"><span>${icon('file')}Ảnh giấy tờ</span></button>`);
+  if(!items.length) return '';
+  return `<section class="id-photos"><div class="id-photo-grid">${items.join('')}</div><p class="form-note">Ảnh từ kho Drive nội bộ · hiển thị để đối chiếu thủ công, không nhận diện khuôn mặt.</p></section>`;
+}
+function imageViewer(id,kind) {
+  const w=state.data.workers.find(item=>item.id===id); if(!w) return;
+  const label=kind==='photo'?'Chân dung':'Ảnh giấy tờ';
+  showModal(`${label} · ${esc(w.ten_that)}`,`<div class="dialog-body"><div class="image-viewer"><img src="/api/v1/workers/${encodeURIComponent(w.id)}/${kind==='cmnd'?'cmnd':'photo'}" alt="${label} của ${esc(w.ten_that)}"></div>${notice('Đối chiếu thủ công với người thực tế. Hệ thống không chấm điểm khuôn mặt và không tự xác thực danh tính.',true)}</div>`,button('Quay lại hồ sơ','detail',null,'secondary',`data-id="${esc(w.id)}"`)+button('Đóng','close',null,'primary'));
+}
 function detail(id) {
   const w=state.data.workers.find(w=>w.id===id); if(!w) return;
   const rating=(key,labels)=>w.loai==='Gia thuộc'?'Không áp dụng':!w._manuallyRated?'Mặc định 3/5 · Chưa đánh giá':w[key]===null?'Chưa chấm':`<span class="stars" aria-label="${w[key]} trên 5 sao">${Array.from({length:w[key]},()=>icon('star')).join('')}</span><br>${esc(labels[w[key]])}`;
   const fields=[['Mã liên thông',w.person_id],['Đơn vị',units[w.unit_id]],['Phân loại',w.loai],['Tổ',w.to],['Tên trên hồ sơ',w.ten_ho_so],['CMND / CCCD',w.cmnd],['Ngày sinh',fmtDate(w.ngay_sinh)],['Tuổi',ageAt(w.ngay_sinh)],['Giới tính',w.gioi_tinh==='M'?'Nam':w.gioi_tinh==='F'?'Nữ':''],['Nơi sinh',w.noi_sinh],['Điện thoại',w.so_dt],['Nhóm máu',w.nhom_mau||'Chưa xác định'],['Khu vực',w.khu_vuc],['Phần cây',w.phan_cay],['Số bảo hiểm',w.so_bao_hiem],['Phòng ở',w.phong_o],['Vai trò phòng ở',w.chu_phong?'Chủ phòng':'Thành viên'],['Quan hệ cư trú',w.quan_he],['Chi tiết nơi ở',w.chi_tiet_noi_o],['Địa chỉ thường trú',w.dia_chi]];
-  showModal('Hồ sơ công nhân',`<div class="dialog-body"><div class="profile-top"><span class="avatar">${esc(w.person_id.slice(-2))}</span><div><h3>${esc(w.ten_that)}</h3>${profileStatus(w)}<p>${esc(w.person_id)} · Phiên bản ${w.version}</p></div></div><dl class="profile-grid">${fields.map(([t,v])=>`<div><dt>${t}</dt><dd>${esc(v||'Chưa cập nhật')}</dd></div>`).join('')}<div><dt>Kỹ năng lao động</dt><dd>${rating('danh_gia_ky_nang',skillLabels)}</dd></div><div><dt>Đạo đức & Kỷ luật</dt><dd>${rating('danh_gia_dao_duc',ethicsLabels)}</dd></div><div><dt>Trạng thái cổng</dt><dd>${isInside(w.id)?'Đang ở trong':'Không có lượt vào đang mở'}</dd></div></dl>${needsReview(w)?`<section class="profile-review"><h3>Theo dõi & khắc phục</h3><p>${esc(w.trang_thai_ky_luat||'Cần xem xét')} · ${fmtDate(w.ngay_ky_luat)}</p><p>${esc(w.hinh_thuc_ky_luat||'Chưa ghi hình thức')} · ${esc(w.nguoi_lap_bien_ban||'Chưa phân công')}</p><p class="preserve-lines">${esc(w.ghi_chu_ky_luat||'Chưa ghi nội dung')}</p></section>`:''}${w.ghi_chu?`<p class="preserve-lines">${esc(w.ghi_chu)}</p>`:''}${notice('Ảnh quét không lưu kèm hồ sơ. Có số giấy tờ hoặc kết quả OCR không đồng nghĩa đã xác minh danh tính.',true)}</div>`,`${w.status==='active'?button('Lưu trữ','archive-confirm','archive','danger',`data-id="${esc(id)}"`):''}${button('Đóng','close',null,'secondary')}${w.status==='active'?button('Chỉnh sửa','edit-worker','edit','primary',`data-id="${esc(id)}"`):''}`);
+  showModal('Hồ sơ công nhân',`<div class="dialog-body"><div class="profile-top">${avatarMarkup(w,'avatar profile-avatar')}<div><h3>${esc(w.ten_that)}</h3>${profileStatus(w)}<p>${esc(w.person_id)} · Phiên bản ${w.version}</p></div></div>${idPhotos(w)}<dl class="profile-grid">${fields.map(([t,v])=>`<div><dt>${t}</dt><dd>${esc(v||'Chưa cập nhật')}</dd></div>`).join('')}<div><dt>Kỹ năng lao động</dt><dd>${rating('danh_gia_ky_nang',skillLabels)}</dd></div><div><dt>Đạo đức & Kỷ luật</dt><dd>${rating('danh_gia_dao_duc',ethicsLabels)}</dd></div><div><dt>Trạng thái cổng</dt><dd>${isInside(w.id)?'Đang ở trong':'Không có lượt vào đang mở'}</dd></div></dl>${needsReview(w)?`<section class="profile-review"><h3>Theo dõi & khắc phục</h3><p>${esc(w.trang_thai_ky_luat||'Cần xem xét')} · ${fmtDate(w.ngay_ky_luat)}</p><p>${esc(w.hinh_thuc_ky_luat||'Chưa ghi hình thức')} · ${esc(w.nguoi_lap_bien_ban||'Chưa phân công')}</p><p class="preserve-lines">${esc(w.ghi_chu_ky_luat||'Chưa ghi nội dung')}</p></section>`:''}${w.ghi_chu?`<p class="preserve-lines">${esc(w.ghi_chu)}</p>`:''}${notice('Ảnh quét không lưu kèm hồ sơ. Có số giấy tờ hoặc kết quả OCR không đồng nghĩa đã xác minh danh tính.',true)}</div>`,`${w.status==='active'?button('Lưu trữ','archive-confirm','archive','danger',`data-id="${esc(id)}"`):''}${button('Đóng','close',null,'secondary')}${w.status==='active'?button('Chỉnh sửa','edit-worker','edit','primary',`data-id="${esc(id)}"`):''}`);
 }
 const ocrFields = {ten_that:'Tên thật',cmnd:'Số CMND / CCCD',ngay_sinh:'Ngày sinh',gioi_tinh:'Giới tính',noi_sinh:'Nơi sinh',dia_chi:'Địa chỉ thường trú'};
 function ocrResultsMarkup(result,existing) {
   const entries=Object.entries(result.fields).filter(([key,value])=>Object.hasOwn(ocrFields,key)&&value);
-  return `<h4>Kết quả đọc · Chưa điền / chưa lưu</h4><p>Đối chiếu và sửa từng giá trị. Trường đang có dữ liệu mặc định không được chọn để tránh ghi đè.</p>${entries.map(([key,value])=>`<label class="ocr-result-row"><input type="checkbox" data-ocr-field="${key}" ${existing[key]?'':'checked'}><span>${ocrFields[key]}<small>Hiện tại: ${esc(existing[key]||'Trống')}</small></span><input data-ocr-value="${key}" aria-label="Kết quả OCR ${ocrFields[key]}" value="${esc(value)}" maxlength="200"></label>`).join('')}${entries.length?'':'<p>Chưa tách được trường đáng tin cậy. Bạn có thể xem văn bản và nhập thủ công.</p>'}<details><summary>Văn bản nhận diện</summary><pre class="ocr-raw">${esc(result.text)}</pre></details><label class="check-field"><input id="ocr-confirm" type="checkbox">Tôi đã đối chiếu các trường được chọn với ảnh.</label>${button('Điền các trường đã chọn','ocr-apply','check','primary',`type="button" ${entries.length?'':'disabled'}`)}`;
+  return `<h4>Kết quả đọc · Chưa điền / chưa lưu</h4><p>Đối chiếu và sửa từng giá trị. Trường đang có dữ liệu mặc định không được chọn để tránh ghi đè.</p>${entries.map(([key,value])=>`<label class="ocr-result-row"><input type="checkbox" data-ocr-field="${key}" ${existing[key]?'':'checked'}><span>${ocrFields[key]}<small>Hiện tại: ${esc(existing[key]||'Trống')}</small></span><input data-ocr-value="${key}" aria-label="Kết quả OCR ${ocrFields[key]}" value="${esc(value)}" maxlength="${key==='dia_chi'||key==='noi_sinh'?500:200}"></label>`).join('')}${entries.length?'':'<p>Chưa tách được trường đáng tin cậy. Bạn có thể xem văn bản và nhập thủ công.</p>'}<details><summary>Văn bản nhận diện</summary><pre class="ocr-raw">${esc(result.text)}</pre></details><label class="check-field"><input id="ocr-confirm" type="checkbox">Tôi đã đối chiếu các trường được chọn với ảnh.</label>${button('Điền các trường đã chọn','ocr-apply','check','primary',`type="button" ${entries.length?'':'disabled'}`)}`;
 }
 async function readDocument() {
   if (!ocrFile||ocrController) return;
@@ -378,6 +438,12 @@ async function action(el) {
   if(type==='ocr-apply') return applyDocument();
   if(type==='edit-worker') return workerForm(id);
   if(type==='detail') return detail(id);
+  if(type==='open-image') return imageViewer(id,el.dataset.kind);
+  if(type==='logout'){
+    await fetch('/api/v1/session',{method:'DELETE'});
+    location.href='/login.html';
+    return;
+  }
   if(type==='new-event') return eventForm(el.dataset.gate);
   if(type==='new-visitor') return visitorForm();
   if(type==='open-discipline') return go('discipline');
@@ -392,11 +458,11 @@ async function action(el) {
   if(type==='retry') return refresh();
   if(type==='export-workers'){
     const rows=currentRoute()==='workers'?filteredWorkers():activeWorkers();
-    return csv('ho-so-minh-hoa',['Mã hồ sơ','Tên thật','Tên hồ sơ','Đơn vị','Phân loại','Tổ','CMND / CCCD','Ngày sinh','Giới tính','Nơi sinh','Điện thoại','Nhóm máu','Khu vực','Phần cây','Số bảo hiểm','Phòng','Chủ phòng','Quan hệ','Chi tiết nơi ở','Địa chỉ','Kỹ năng','Đạo đức & Kỷ luật','Đã đánh giá','Ngày kỷ luật','Hình thức','Trạng thái theo dõi','Phụ trách','Nội dung theo dõi','Ghi chú','Trạng thái hồ sơ'],rows.map(w=>[w.person_id,w.ten_that,w.ten_ho_so,w.unit_id,w.loai,w.to,w.cmnd,w.ngay_sinh,w.gioi_tinh,w.noi_sinh,w.so_dt,w.nhom_mau,w.khu_vuc,w.phan_cay,w.so_bao_hiem,w.phong_o,w.chu_phong?'Có':'Không',w.quan_he,w.chi_tiet_noi_o,w.dia_chi,ratingText(w,'danh_gia_ky_nang'),ratingText(w,'danh_gia_dao_duc'),w._manuallyRated?'Có':'Không',w.ngay_ky_luat,w.hinh_thuc_ky_luat,w.trang_thai_ky_luat,w.nguoi_lap_bien_ban,w.ghi_chu_ky_luat,w.ghi_chu,w.status]));
+    return csv(isImported()?'ho-so-dsx02':'ho-so-minh-hoa',['Mã hồ sơ','Tên thật','Tên hồ sơ','Đơn vị','Phân loại','Tổ','CMND / CCCD','Ngày sinh','Giới tính','Nơi sinh','Điện thoại','Nhóm máu','Khu vực','Phần cây','Số bảo hiểm','Phòng','Chủ phòng','Quan hệ','Chi tiết nơi ở','Địa chỉ','Kỹ năng','Đạo đức & Kỷ luật','Đã đánh giá','Ngày kỷ luật','Hình thức','Trạng thái theo dõi','Phụ trách','Nội dung theo dõi','Ghi chú','Trạng thái hồ sơ'],rows.map(w=>[w.person_id,w.ten_that,w.ten_ho_so,w.unit_id,w.loai,w.to,w.cmnd,w.ngay_sinh,w.gioi_tinh,w.noi_sinh,w.so_dt,w.nhom_mau,w.khu_vuc,w.phan_cay,w.so_bao_hiem,w.phong_o,w.chu_phong?'Có':'Không',w.quan_he,w.chi_tiet_noi_o,w.dia_chi,ratingText(w,'danh_gia_ky_nang'),ratingText(w,'danh_gia_dao_duc'),w._manuallyRated?'Có':'Không',w.ngay_ky_luat,w.hinh_thuc_ky_luat,w.trang_thai_ky_luat,w.nguoi_lap_bien_ban,w.ghi_chu_ky_luat,w.ghi_chu,w.status]));
   }
   if(type==='export-discipline') return csv('theo-doi-lao-dong',['Mã hồ sơ','Họ tên','Đơn vị','Tổ','Kỹ năng','Đạo đức & Kỷ luật','Ngày ghi nhận','Hình thức','Trạng thái','Phụ trách','Nội dung'],disciplineWorkers().map(w=>[w.person_id,w.ten_that,w.unit_id,w.to,ratingText(w,'danh_gia_ky_nang'),ratingText(w,'danh_gia_dao_duc'),w.ngay_ky_luat,w.hinh_thuc_ky_luat,w.trang_thai_ky_luat,w.nguoi_lap_bien_ban,w.ghi_chu_ky_luat]));
-  if(type==='export-rooms') return csv('cu-tru-minh-hoa',['Phòng','Đơn vị','Sức chứa','Số người','Vượt sức chứa'],scoped(state.data.rooms).map(r=>[r.id,r.unit_id,r.capacity,occupancy(r),occupancy(r)>r.capacity?'Có':'Không']));
-  if(type==='export-events') return csv('nhat-ky-minh-hoa',['Thời gian','Mã hồ sơ','Tên','Đơn vị','Cổng','Chiều','Phương thức'],scoped(state.data.events).map(e=>[e.at,e.person_id,e.name,e.unit_id,e.gate,e.direction,'Thủ công']));
+  if(type==='export-rooms') return csv(isImported()?'cu-tru-dsx02':'cu-tru-minh-hoa',['Phòng','Đơn vị','Sức chứa','Số người','Vượt sức chứa'],scoped(state.data.rooms).map(r=>[r.id,r.unit_id,r.capacity,occupancy(r),occupancy(r)>r.capacity?'Có':'Không']));
+  if(type==='export-events') return csv(isImported()?'nhat-ky-dsx02':'nhat-ky-minh-hoa',['Thời gian','Mã hồ sơ','Tên','Đơn vị','Cổng','Chiều','Phương thức'],scoped(state.data.events).map(e=>[e.at,e.person_id,e.name,e.unit_id,e.gate,e.direction,'Thủ công']));
   if(type==='export-contract'){const contract=await api('contract');download('cn-workforce-api-draft.json',JSON.stringify(contract,null,2),'application/json');toast('Đã tải hợp đồng đề xuất, chưa có kết nối thật.');return;}
   if(type==='branch'){const b=branches[Number(id)];showModal(esc(b.title),`<div class="dialog-body">${badge(b.sub,'gray')}<ul class="detail-list">${b.items.map(t=>`<li>${esc(t)}</li>`).join('')}</ul></div>`,button('Đóng','close',null,'secondary')+button('Xem phân hệ','branch-go','arrow','primary',`data-route="${b.route}"`));return;}
   if(type==='branch-go'){closeModal();return go(el.dataset.route);}
@@ -468,4 +534,7 @@ document.getElementById('menu-toggle').addEventListener('click',()=>{const open=
 document.getElementById('notification-button').addEventListener('click',()=>{go('overview');requestAnimationFrame(()=>document.getElementById('attention')?.scrollIntoView({behavior:'auto',block:'center'}));});
 window.addEventListener('hashchange',()=>{document.getElementById('sidebar').classList.remove('open');document.getElementById('menu-toggle').setAttribute('aria-expanded','false');render();window.scrollTo(0,0);});
 document.addEventListener('keydown',e=>{if(e.key==='Escape'){document.getElementById('sidebar').classList.remove('open');document.getElementById('menu-toggle').setAttribute('aria-expanded','false');}});
-refresh().catch(error=>{main.innerHTML=`<div class="error-state"><h1>Chưa kết nối được máy chủ cục bộ</h1><p>${esc(error.message)}</p><p>Mở ứng dụng qua máy chủ Python, không mở trực tiếp tệp HTML.</p>${button('Thử lại','retry','refresh')}</div>`;});
+if ('serviceWorker' in navigator && (location.protocol==='https:' || ['localhost','127.0.0.1'].includes(location.hostname))) {
+  navigator.serviceWorker.register('/sw.js').catch(()=>{});
+}
+refresh().catch(error=>{main.innerHTML=`<div class="error-state"><h1>Chưa kết nối được máy chủ</h1><p>${esc(error.message)}</p><p>Kiểm tra kết nối mạng hoặc liên hệ quản trị viên. Không mở trực tiếp tệp HTML.</p>${button('Thử lại','retry','refresh')}</div>`;});

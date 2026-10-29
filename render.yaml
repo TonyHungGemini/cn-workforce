@@ -1,0 +1,35 @@
+services:
+  - type: web
+    name: cn-workforce
+    runtime: docker
+    plan: starter
+    region: singapore
+    healthCheckPath: /healthz
+    envVars:
+      - key: CN_HOST
+        value: 0.0.0.0
+      - key: CN_DATA_DIR
+        value: /data
+      - key: CN_SEED_DEMO
+        value: "0"
+      - key: CN_ACCESS_CODE
+        sync: false
+      - key: CN_SECRET_KEY
+        generateValue: true
+      - key: CN_SYNC_TOKEN
+        sync: false
+      - key: CN_PUBLIC_URL
+        sync: false
+      - key: CN_DRIVE_CREDENTIALS
+        value: /etc/secrets/drive-service-account.json
+      - key: CN_MASTER_URL
+        sync: false
+      - key: CN_MASTER_IMAGES_URL
+        sync: false
+    secretFiles:
+      - name: drive-service-account.json
+        mountPath: /etc/secrets/drive-service-account.json
+    disk:
+      name: cn-data
+      mountPath: /data
+      sizeGB: 1

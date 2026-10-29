@@ -1,0 +1,9 @@
+.git
+.local
+node_modules
+tests
+__pycache__
+*.pyc
+.env
+private
+sync-report.json

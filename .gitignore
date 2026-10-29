@@ -2,3 +2,11 @@
 __pycache__/
 *.pyc
 node_modules/
+.env
+.env.*
+!.env.example
+*.pem
+*service-account*.json
+*credentials*.json
+sync-report.json
+image-cache/
