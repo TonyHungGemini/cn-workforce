@@ -20,15 +20,12 @@ services:
         sync: false
       - key: CN_PUBLIC_URL
         sync: false
-      - key: CN_DRIVE_CREDENTIALS
-        value: /etc/secrets/drive-service-account.json
+      - key: CN_DRIVE_CREDENTIALS_JSON
+        sync: false
       - key: CN_MASTER_URL
         sync: false
       - key: CN_MASTER_IMAGES_URL
         sync: false
-    secretFiles:
-      - name: drive-service-account.json
-        mountPath: /etc/secrets/drive-service-account.json
     disk:
       name: cn-data
       mountPath: /data

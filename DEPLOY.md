@@ -16,7 +16,8 @@ Mục tiêu: sếp và nhân viên mở **một đường link HTTPS** là xem �
 3. Ghi lại email dạng `ten@project.iam.gserviceaccount.com`.
 4. Trong Google Drive, chia sẻ thư mục chứa ảnh CMND/chân dung cho email đó với quyền **Viewer**.
 5. Kiểm tra `cn-dsx02-main/data/images.json`: mỗi mã hồ sơ trỏ tới đúng file ID trên Drive. App chỉ đọc theo file ID, không liệt kê hay tải cả thư mục.
-6. Trên Render, tạo **Secret File** tên `drive-service-account.json`, nội dung là tệp JSON ở bước 2. `render.yaml` đã trỏ `CN_DRIVE_CREDENTIALS` tới `/etc/secrets/drive-service-account.json`.
+6. Trên Render, thêm biến `CN_DRIVE_CREDENTIALS_JSON`, dán **toàn bộ nội dung** tệp JSON ở bước 2 (giữ nguyên các ký tự `\n` trong `private_key`, không thêm dấu nháy bao ngoài). `render.yaml` đã khai báo biến này ở chế độ nhập tay.
+7. Kiểm tra khoá trước khi dùng: `python3 scripts/check_drive.py` — in `OK` kèm số byte là đọc được ảnh.
 
 Không dùng khoá admin/tài khoản cá nhân. Service account chỉ có quyền đọc đúng thư mục được chia sẻ.
 
