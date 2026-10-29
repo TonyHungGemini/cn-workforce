@@ -123,9 +123,8 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(48, len({w["person_id"] for w in data["workers"]}))
         self.assertEqual({"source": "Dữ liệu minh họa", "integration": "disconnected"}, data["meta"])
         self.assertEqual({
-            "units": [{"id": "DSX02", "name": "Đội sản xuất 02"},
-                      {"id": "DSX03", "name": "Đội sản xuất 03"},
-                      {"id": "NMCB", "name": "Nhà máy chế biến"}],
+            "units": [{"id": f"DSX{number:02d}", "name": f"Đội sản xuất {number:02d}"} for number in range(1, 9)]
+                     + [{"id": "NMCB", "name": "Nhà máy chế biến"}],
             "teams": [f"Tổ {i}" for i in range(1, 9)],
         }, data["directory"])
         self.assertEqual([{"key": "schema_version", "value": "1.2"}], self.database_snapshot()["metadata"])
@@ -899,7 +898,8 @@ class HTTPTests(unittest.TestCase):
         self.assertGreater(self.port, 0)
         data = self.api("GET", "/api/v1/bootstrap")
         self.assertEqual(48, len(data["workers"]))
-        self.assertEqual(["DSX02", "DSX03", "NMCB"], [u["id"] for u in data["directory"]["units"]])
+        self.assertEqual([f"DSX{number:02d}" for number in range(1, 9)] + ["NMCB"],
+                         [u["id"] for u in data["directory"]["units"]])
         self.assertEqual([f"Tổ {i}" for i in range(1, 9)], data["directory"]["teams"])
         self.assertEqual(ADDED_DEFAULTS, {field: data["workers"][0][field] for field in ADDED_DEFAULTS})
         contract = self.api("GET", "/api/v1/contract")

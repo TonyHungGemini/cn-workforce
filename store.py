@@ -8,7 +8,12 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 
-UNITS = ("DSX02", "DSX03", "NMCB")
+UNIT_NAMES = {
+    **{f"DSX{number:02d}": f"Đội sản xuất {number:02d}" for number in range(1, 9)},
+    "NMCB": "Nhà máy chế biến",
+}
+UNITS = tuple(UNIT_NAMES)
+DEMO_UNITS = ("DSX02", "DSX03", "NMCB")
 KINDS = ("Lao động", "Gia thuộc", "Khác")
 TEAMS = tuple(f"Tổ {i}" for i in range(1, 9))
 GATES = ("Cổng chính", "Cổng khu ở")
@@ -212,7 +217,7 @@ class Store:
     def _seed(self, connection):
         now = datetime.now(timezone.utc)
         seed_time = timestamp(now - timedelta(hours=4))
-        for prefix, unit in zip("ABC", UNITS):
+        for prefix, unit in zip("ABC", DEMO_UNITS):
             for number in range(1, 5):
                 room_id = f"{prefix}{number:02d}"
                 connection.execute("INSERT INTO rooms VALUES (?, ?, ?)", (room_id, unit, 3 if room_id == "A01" else 6))
@@ -223,7 +228,7 @@ class Store:
             kind = "Lao động" if number <= 32 else "Gia thuộc" if number <= 46 else "Khác"
             worker = {
                 **EXTRA_WORKER_DEFAULTS,
-                "id": identifier(), "person_id": self._next_person(connection), "unit_id": UNITS[unit_index],
+                "id": identifier(), "person_id": self._next_person(connection), "unit_id": DEMO_UNITS[unit_index],
                 "ten_that": f"Hồ sơ mẫu {number:02d}", "ten_ho_so": f"Hồ sơ mẫu {number:02d}",
                 "loai": kind, "to": TEAMS[index % 4], "phong_o": f"{'ABC'[unit_index]}{(index // 3) % 4 + 1:02d}",
                 "so_dt": "", "cmnd": "" if number % 7 == 0 else f"DEMO-{number:04d}",
@@ -245,7 +250,7 @@ class Store:
         for index in range(2):
             visitor = {
                 "id": identifier(), "name": f"Khách mẫu {index + 1:02d}", "company": "Đơn vị minh họa",
-                "purpose": "Tham quan demo", "host": "Đầu mối minh họa", "unit_id": UNITS[index],
+                "purpose": "Tham quan demo", "host": "Đầu mối minh họa", "unit_id": DEMO_UNITS[index],
                 "expected": (date.today() + timedelta(days=index)).isoformat(), "status": "registered",
                 "version": 1, "created_at": seed_time,
             }
@@ -260,11 +265,7 @@ class Store:
             return {
                 "ok": True, "mode": "imported" if imported else "demo",
                 "directory": {
-                    "units": [
-                        {"id": "DSX02", "name": "Đội sản xuất 02"},
-                        {"id": "DSX03", "name": "Đội sản xuất 03"},
-                        {"id": "NMCB", "name": "Nhà máy chế biến"},
-                    ],
+                    "units": [{"id": unit, "name": UNIT_NAMES[unit]} for unit in UNITS],
                     "teams": list(TEAMS),
                 },
                 "workers": [json.loads(row["data"]) for row in connection.execute("SELECT data FROM workers ORDER BY person_id")],
@@ -275,7 +276,7 @@ class Store:
                 "outbox": [dict(row) for row in connection.execute("SELECT * FROM outbox ORDER BY occurred_at DESC, rowid DESC")],
                 "images": self._image_index(connection),
                 "meta": {
-                    "source": "Dữ liệu ĐSX02" if imported else "Dữ liệu minh họa",
+                    "source": "Dữ liệu công ty" if imported else "Dữ liệu minh họa",
                     "integration": "disconnected",
                 },
             }

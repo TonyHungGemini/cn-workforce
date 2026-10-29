@@ -13,6 +13,7 @@ function fixture() {
   const context = vm.createContext({
     document:{getElementById:element,addEventListener(){}},
     window:{addEventListener(){}}, location:{hash:'#workers'},
+    navigator:{serviceWorker:{register:() => Promise.resolve()}},
     fetch:() => new Promise(() => {}), setTimeout(){},clearTimeout(){},
     URL,Blob,Intl,Date,console,
   });
