@@ -7,31 +7,72 @@
   const MAX_FILE = 10 * 1024 * 1024;
   const MAX_DIMENSION = 12000;
   const MAX_PIXELS = 24000000;
-  const TARGET_DIMENSION = 2200;
-  const TIMEOUT = 60000;
+  const TARGET_DIMENSION = 1800;
+  const TIMEOUT = 120000;
   const LIMITS = { cmnd: 64, ten_that: 150, ngay_sinh: 10, gioi_tinh: 1, noi_sinh: 250, dia_chi: 500 };
   const ALIASES = {
-    cmnd: ['so dinh danh ca nhan', 'so can cuoc cong dan', 'so chung minh nhan dan', 'so cmnd', 'so cccd', 'cmnd', 'cccd', 'so ho chieu', 'identity card number', 'national id number', 'document number', 'passport number', 'passport no.', 'passport no', 'id number', 'id no.', 'id no'],
+    cmnd: ['so dinh danh ca nhan', 'so can cuoc cong dan', 'so chung minh nhan dan', 'so cmnd', 'so cccd', 'cmnd', 'cccd', 'so ho chieu', 'identity card number', 'national id number', 'document number', 'passport number', 'passport no.', 'passport no', 'id number', 'id no.', 'id no', 'so', 'sb'],
     ten_that: ['ho va ten', 'ho ten', 'full name', 'name'],
     ngay_sinh: ['ngay thang nam sinh', 'ngay sinh', 'date of birth', 'birth date', 'dob'],
     gioi_tinh: ['gioi tinh', 'gender', 'sex'],
     noi_sinh: ['noi sinh', 'place of birth', 'birthplace'],
     dia_chi: ['dia chi thuong tru', 'noi thuong tru', 'noi cu tru', 'dia chi', 'place of residence', 'permanent address', 'residential address', 'address'],
   };
+  const BARE_ID = new Set(['so', 'sb']);
   const fold = value => value.normalize('NFD').replace(/\p{M}/gu, '').replace(/[đĐ]/g, 'd').toLowerCase();
+  const CONFUSABLE = { 0: 'o', 1: 'i', 2: 'z', 4: 'a', 5: 's', 6: 'o', 8: 'b', 9: 'g', '|': 'l' };
   const escapeRE = value => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const LABELS = Object.entries(ALIASES).map(([field, aliases]) => {
     const alternatives = aliases.slice().sort((a, b) => b.length - a.length).map(escapeRE).join('|');
     return [field, new RegExp(`^(?:${alternatives})(?:\\s*/\\s*(?:${alternatives}))?(?:\\s*[:：]\\s*|\\s+|$)`, 'u')];
   });
-
-  function label(line) {
-    for (const [field, pattern] of LABELS) {
-      const match = pattern.exec(fold(line));
-      if (match) return { field, header: match[0], value: line.slice(match[0].length).trim() };
-    }
-    return null;
+  // Then a phone photo: strip accents, fold look-alike digits back to letters
+  // ("Gi6i tinh", "S6") and look for a label anywhere in the line, because the
+  // engine often prefixes junk such as "| " or "mm. ".
+  function foldedChars(line) {
+    return Array.from(line, ch => {
+      const base = fold(ch);
+      return CONFUSABLE[base] ?? base;
+    });
   }
+
+  function label(line, loose) {
+    if (!loose) {
+      for (const [field, pattern] of LABELS) {
+        const match = pattern.exec(fold(line));
+        if (match) {
+          const head = fold(match[0]).replace(/[\s:：/]+$/, '');
+          return { field, head, value: line.slice(match[0].length).trim() };
+        }
+      }
+      return null;
+    }
+    const text = foldedChars(line).join('');
+    let best = null;
+    for (const [field, aliases] of Object.entries(ALIASES)) {
+      for (const alias of aliases) {
+        for (let index = text.indexOf(alias); index !== -1; index = text.indexOf(alias, index + 1)) {
+          const before = index ? text[index - 1] : '';
+          const after = text[index + alias.length] || '';
+          if (/[a-z]/.test(before) || /[a-z]/.test(after)) continue;
+          if (!best || index < best.index || (index === best.index && alias.length > best.length)) {
+            best = { field, head: alias, index, length: alias.length };
+          }
+        }
+      }
+    }
+    if (!best) return null;
+    const value = Array.from(line).slice(best.index + best.length).join('').replace(/^[\s:：;,”’"'’\-–—.]+/, '').trim();
+    return { field: best.field, head: best.head, value };
+  }
+
+  // Bare "Số" only counts as a document number when the value is mostly digits,
+  // so an address line such as "Số 12, Đường…" cannot become a CMND number.
+  const usable = item => {
+    if (!BARE_ID.has(item.head)) return true;
+    const value = item.value;
+    return (value.match(/\d/g) || []).length >= 6 && /^[A-Z0-9-]+(?: [A-Z0-9-]+){0,2}$/i.test(value);
+  };
 
   function dateISO(year, month, day) {
     if (![year, month, day].every(Number.isInteger) || year < 1900 || month < 1 || month > 12 || day < 1 || day > 31) return '';
@@ -135,13 +176,14 @@
     };
     const lines = text.normalize('NFC').split(/\r\n?|\n|\u2028|\u2029/).map(line => line.trim());
     for (let i = 0; i < lines.length; i++) {
-      const item = label(lines[i]);
-      if (!item) continue;
+      let item = label(lines[i], false);
+      if (!item || !usable(item)) item = label(lines[i], true);
+      if (!item || !usable(item)) continue;
       let value = item.value;
       // A value may occupy the immediately following line, but never consume
       // another label, arbitrary later paragraphs, or an MRZ line as an address.
-      if (!value && lines[i + 1] && !label(lines[i + 1]) && !/[<:：]/.test(lines[i + 1])) value = lines[i + 1];
-      if (item.field === 'ngay_sinh') value = birthDate(value, item.header.startsWith('ngay'));
+      if (!value && lines[i + 1] && !label(lines[i + 1], false) && !label(lines[i + 1], true) && !/[<:：]/.test(lines[i + 1])) value = lines[i + 1];
+      if (item.field === 'ngay_sinh') value = birthDate(value, fold(item.head).startsWith('ngay'));
       if (item.field === 'gioi_tinh') value = ({ nam: 'M', male: 'M', m: 'M', nu: 'F', female: 'F', f: 'F' })[fold(value)] || '';
       add(item.field, value);
     }

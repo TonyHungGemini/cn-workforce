@@ -95,6 +95,11 @@ dialog:has(#worker-form) .dialog-footer{position:sticky;bottom:0;z-index:2;backg
 .ocr-body p{font-size:10px;line-height:1.8}
 .ocr-toolbar{display:grid;grid-template-columns:1.5fr 1fr;gap:15px}
 .ocr-toolbar input[type=file]{font-size:10px;min-width:0;padding:9px;max-width:100%}
+.ocr-sources{display:flex;flex-wrap:wrap;gap:8px;align-content:start}
+.ocr-sources .button{cursor:pointer;min-height:42px}
+.ocr-sources input[type=file]{display:none}
+@media(hover:hover) and (pointer:fine){.ocr-camera{display:none}}
+#ocr-confirm-row.needs-check{outline:2px solid #b24e44;outline-offset:4px;border-radius:6px;color:#a4322a}
 .ocr-controls{display:flex;flex-wrap:wrap;gap:8px;margin:15px 0}
 .ocr-controls .button{font-size:10px}
 #ocr-preview{max-width:100%;height:auto;max-height:230px;object-fit:contain;display:block;border-radius:6px;border:1px solid #dce5d6;background:white;margin:12px auto}

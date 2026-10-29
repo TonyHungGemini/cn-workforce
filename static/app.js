@@ -30,6 +30,7 @@ const icons = {
   refresh: '<path d="M20 10a8 8 0 0 0-14-5L3 8m0-5v5h5m-4 6a8 8 0 0 0 14 5l3-3m0 5v-5h-5"/>',
   info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v6m0-10h.01"/>',
   lock: '<rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3m-4 5v2"/>',
+  camera: '<path d="M4 8h3l2-3h6l2 3h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1Z"/><circle cx="12" cy="13" r="3.5"/>',
 };
 const icon = name => `<svg class="icon" viewBox="0 0 24 24" aria-hidden="true">${icons[name] || icons.file}</svg>`;
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -322,7 +323,7 @@ function workerForm(id,scan=false) {
   const w=state.data.workers.find(w=>w.id===id) || {loai:'Lao động',unit_id:state.unit==='all'?'':state.unit,to:teams[0],quan_he:'Khác',gioi_tinh:'',phong_o:'',danh_gia_ky_nang:3,danh_gia_dao_duc:3,_manuallyRated:false};
   showModal(id?'Chỉnh sửa hồ sơ công nhân':'Thêm hồ sơ công nhân',`<form id="worker-form" data-id="${esc(id||'')}" data-version="${w.version||''}"><div class="dialog-body">
     <p class="form-note">Phạm vi toàn công ty · Chọn đúng đơn vị quản lý. ${isImported()?'Dữ liệu công ty đã nhập.':'Chỉ sử dụng thông tin và ảnh minh họa.'}</p>
-    <details class="ocr-panel" id="ocr-panel" ${scan?'open':''}><summary>${icon('file')}Quét CMND / CCCD · Điền nhanh hồ sơ<span>Trên máy</span></summary><div class="ocr-body"><p>Ảnh chỉ được đọc trong trình duyệt, không gửi lên máy chủ hay AI bên ngoài. Kết quả cần kiểm tra; không tự xác thực danh tính.</p><div class="ocr-toolbar"><label class="form-field">Chọn ảnh minh họa<input id="ocr-file" type="file" accept="image/png,image/jpeg,image/webp"></label><label class="form-field">Ngôn ngữ đọc<select id="ocr-language"><option value="eng">Chữ Latin / MRZ</option><option value="vie+eng">Tiếng Việt + Latin</option><option value="khm+eng">Tiếng Khmer + Latin</option></select></label></div><p class="form-note">PNG, JPEG, WebP · Tối đa 10 MB. Khmer không được tự dịch sang tiếng Việt. Ảnh không lưu kèm hồ sơ.</p><div class="ocr-controls">${button('Đọc ảnh trên máy','ocr-read','file','primary','type="button" disabled')}${button('Dừng đọc','ocr-cancel',null,'secondary','type="button" hidden')}<a href="assets/ocr-sample.png" download="anh-mau-quyet-cmnd.png" class="button secondary">Tải ảnh mẫu</a></div><img id="ocr-preview" alt="Ảnh minh họa đang đối chiếu" hidden><p id="ocr-status" role="status" aria-live="polite">Chọn ảnh để bắt đầu.</p><div id="ocr-results"></div></div></details>
+    <details class="ocr-panel" id="ocr-panel" ${scan?'open':''}><summary>${icon('file')}Quét CMND / CCCD · Điền nhanh hồ sơ<span>Trên máy</span></summary><div class="ocr-body"><p>Ảnh chỉ được đọc trong trình duyệt, không gửi lên máy chủ hay AI bên ngoài. Kết quả cần kiểm tra; không tự xác thực danh tính.</p><div class="ocr-toolbar"><div class="ocr-sources"><label class="button primary ocr-camera">${icon('camera')}Chụp ảnh<input id="ocr-camera" type="file" accept="image/*" capture="environment" hidden></label><label class="button secondary ocr-upload">${icon('file')}Chọn ảnh có sẵn<input id="ocr-file" type="file" accept="image/*" hidden></label></div><label class="form-field">Ngôn ngữ đọc<select id="ocr-language"><option value="vie+eng">Tiếng Việt + Latin (khuyến nghị)</option><option value="eng">Chỉ chữ Latin / MRZ</option><option value="khm+eng">Tiếng Khmer + Latin</option></select></label></div><p class="form-note">Chụp thẳng mặt trước, đủ sáng, không lóa là đọc tốt nhất. PNG, JPEG, WebP · tối đa 10 MB. Bộ đọc chạy trên máy, không dịch và không gửi ảnh đi đâu; ảnh không lưu kèm hồ sơ.</p><div class="ocr-controls">${button('Đọc ảnh trên máy','ocr-read','file','primary','type="button" disabled')}${button('Dừng đọc','ocr-cancel',null,'secondary','type="button" hidden')}<a href="assets/ocr-sample.png" download="anh-mau-quyet-cmnd.png" class="button secondary">Tải ảnh mẫu</a></div><img id="ocr-preview" alt="Ảnh minh họa đang đối chiếu" hidden><p id="ocr-status" role="status" aria-live="polite">Chọn hoặc chụp ảnh để bắt đầu.</p><div id="ocr-results"></div></div></details>
     <h3 class="form-section-title">01 · Danh tính & liên hệ</h3><div class="form-grid">${field('Tên thật / tên hiển thị','ten_that',w.ten_that,'text',true)}${field('Tên trên hồ sơ','ten_ho_so',w.ten_ho_so)}${field('Số CMND / CCCD','cmnd',w.cmnd)}${field('Điện thoại / liên hệ','so_dt',w.so_dt,'tel')}${field('Ngày sinh','ngay_sinh',w.ngay_sinh,'date',false,false,`max="${today()}"`)}${selectField('Giới tính','gioi_tinh',[['','Chưa cập nhật'],['M','Nam'],['F','Nữ']],w.gioi_tinh)}${field('Nơi sinh','noi_sinh',w.noi_sinh,'text',false,false,'',500)}<label class="form-field">Tuổi (tính theo ngày sinh)<input id="worker-age" readonly value="${ageAt(w.ngay_sinh)}" placeholder="Chưa có ngày sinh"></label>${field('Địa chỉ thường trú','dia_chi',w.dia_chi,'text',false,true,'',500)}</div>
     <h3 class="form-section-title">02 · Đơn vị, lao động & cư trú</h3><div class="form-grid">${selectField('Đơn vị quản lý *','unit_id',[['','Chọn đơn vị'],...Object.entries(units)],w.unit_id)}${selectField('Phân loại','loai',[['Lao động','Lao động'],['Gia thuộc','Gia thuộc'],['Khác','Khác']],w.loai)}${selectField('Tổ','to',teams.map(t=>[t,t]),w.to)}${field('Khu vực','khu_vuc',w.khu_vuc)}${field('Phần cây hiện tại','phan_cay',w.phan_cay)}${field('Số bảo hiểm','so_bao_hiem',w.so_bao_hiem)}${selectField('Phòng ở','phong_o',roomOptions(w.unit_id),w.phong_o)}${selectField('Quan hệ cư trú','quan_he',relationshipOptions(w.quan_he),w.quan_he)}${field('Chi tiết nơi ở','chi_tiet_noi_o',w.chi_tiet_noi_o,'text',false,true,'',500)}<label class="check-field full"><input type="checkbox" name="chu_phong" ${w.chu_phong?'checked':''}> Là chủ phòng / đầu mối phòng ở</label></div>
     <h3 class="form-section-title">03 · Nhóm máu</h3><div class="form-grid"><label class="form-field">Nhóm máu<input name="nhom_mau" list="blood-types" value="${esc(w.nhom_mau)}" maxlength="8" placeholder="Chưa xác định"><datalist id="blood-types">${['O','A','B','AB','O+','O-','A+','A-','B+','B-','AB+','AB-','RH-'].map(v=>`<option value="${v}">`).join('')}</datalist></label><p class="form-note">Chỉ ghi theo thông tin đã đối chiếu. Không suy ra từ CMND; không dùng trường này thay cho xét nghiệm y tế.</p></div>
@@ -364,7 +365,26 @@ function detail(id) {
 const ocrFields = {ten_that:'Tên thật',cmnd:'Số CMND / CCCD',ngay_sinh:'Ngày sinh',gioi_tinh:'Giới tính',noi_sinh:'Nơi sinh',dia_chi:'Địa chỉ thường trú'};
 function ocrResultsMarkup(result,existing) {
   const entries=Object.entries(result.fields).filter(([key,value])=>Object.hasOwn(ocrFields,key)&&value);
-  return `<h4>Kết quả đọc · Chưa điền / chưa lưu</h4><p>Đối chiếu và sửa từng giá trị. Trường đang có dữ liệu mặc định không được chọn để tránh ghi đè.</p>${entries.map(([key,value])=>`<label class="ocr-result-row"><input type="checkbox" data-ocr-field="${key}" ${existing[key]?'':'checked'}><span>${ocrFields[key]}<small>Hiện tại: ${esc(existing[key]||'Trống')}</small></span><input data-ocr-value="${key}" aria-label="Kết quả OCR ${ocrFields[key]}" value="${esc(value)}" maxlength="${key==='dia_chi'||key==='noi_sinh'?500:200}"></label>`).join('')}${entries.length?'':'<p>Chưa tách được trường đáng tin cậy. Bạn có thể xem văn bản và nhập thủ công.</p>'}<details><summary>Văn bản nhận diện</summary><pre class="ocr-raw">${esc(result.text)}</pre></details><label class="check-field"><input id="ocr-confirm" type="checkbox">Tôi đã đối chiếu các trường được chọn với ảnh.</label>${button('Điền các trường đã chọn','ocr-apply','check','primary',`type="button" ${entries.length?'':'disabled'}`)}`;
+  return `<h4>Kết quả đọc · Chưa điền / chưa lưu</h4><p>Đối chiếu và sửa từng giá trị. Trường đang có dữ liệu mặc định không được chọn để tránh ghi đè.</p>${entries.length?`<label class="check-field"><input id="ocr-select-all" type="checkbox">Chọn tất cả trường đọc được</label>`:''}${entries.map(([key,value])=>`<label class="ocr-result-row"><input type="checkbox" data-ocr-field="${key}" ${existing[key]?'':'checked'}><span>${ocrFields[key]}<small>Hiện tại: ${esc(existing[key]||'Trống')}</small></span><input data-ocr-value="${key}" aria-label="Kết quả OCR ${ocrFields[key]}" value="${esc(value)}" maxlength="${key==='dia_chi'||key==='noi_sinh'?500:200}"></label>`).join('')}${entries.length?'':'<p>Chưa tách được trường đáng tin cậy. Chụp lại thẳng và đủ sáng, chọn ngôn ngữ “Tiếng Việt + Latin”, rồi xem văn bản bên dưới để nhập tay.</p>'}<details><summary>Văn bản nhận diện</summary><pre class="ocr-raw">${esc(result.text)}</pre></details><label class="check-field" id="ocr-confirm-row"><input id="ocr-confirm" type="checkbox">Tôi đã đối chiếu các trường được chọn với ảnh.</label>${button('Điền các trường đã chọn','ocr-apply','check','primary',`type="button" ${entries.length?'':'disabled'}`)}`;
+}
+const ocrStages = [
+  ['loading tesseract core','Đang tải bộ đọc (lần đầu vài MB)…'],
+  ['initializing tesseract','Đang khởi động bộ đọc…'],
+  ['initialized tesseract','Đã khởi động bộ đọc…'],
+  ['loading language traineddata','Đang tải dữ liệu ngôn ngữ (lần đầu vài MB)…'],
+  ['loaded language traineddata','Đã tải dữ liệu ngôn ngữ…'],
+  ['initializing api','Đang chuẩn bị nhận dạng…'],
+  ['initialized api','Đang nhận dạng…'],
+  ['recognizing text','Đang đọc chữ…'],
+];
+function ocrProgressText(progress) {
+  if (typeof progress==='string') return progress;
+  const status=String(progress?.status||''),stage=ocrStages.find(([key])=>status.startsWith(key));
+  const percent=Math.round((Number(progress?.progress)||0)*100);
+  return `${stage?stage[1]:'Đang xử lý ảnh…'}${percent>0&&percent<100?` ${percent}%`:''}`;
+}
+function setOcrInputs(disabled) {
+  for(const id of ['ocr-file','ocr-camera']){const input=document.getElementById(id);if(input) input.disabled=disabled;}
 }
 async function readDocument() {
   if (!ocrFile||ocrController) return;
@@ -373,12 +393,12 @@ async function readDocument() {
   document.getElementById('ocr-results').innerHTML='';
   form.querySelector('[data-action="ocr-read"]').disabled=true;
   form.querySelector('[data-action="ocr-cancel"]').hidden=false;
-  document.getElementById('ocr-file').disabled=true;
+  setOcrInputs(true);
   document.getElementById('ocr-language').disabled=true;
   status.textContent='Đang chuẩn bị công cụ đọc trên máy…';
   try {
     const result=await window.DocumentOCR.recognize(ocrFile,document.getElementById('ocr-language').value,progress=>{
-      if (form.isConnected&&!controller.signal.aborted) status.textContent=typeof progress==='string'?progress:`Đang đọc trên máy… ${Math.round((progress.progress||0)*100)}%`;
+      if (form.isConnected&&!controller.signal.aborted) status.textContent=ocrProgressText(progress);
     },controller.signal);
     if (!form.isConnected||controller.signal.aborted) return;
     ocrResult=result;
@@ -391,7 +411,7 @@ async function readDocument() {
     if (form.isConnected) {
       form.querySelector('[data-action="ocr-read"]').disabled=false;
       form.querySelector('[data-action="ocr-cancel"]').hidden=true;
-      document.getElementById('ocr-file').disabled=false;
+      setOcrInputs(false);
       document.getElementById('ocr-language').disabled=false;
     }
     if (ocrController===controller) ocrController=null;
@@ -400,7 +420,15 @@ async function readDocument() {
 function applyDocument() {
   const form=document.getElementById('worker-form');
   if (!ocrResult||!form) return;
-  if (!document.getElementById('ocr-confirm').checked) {document.getElementById('ocr-status').textContent='Hãy xác nhận đã đối chiếu với ảnh trước khi điền.';return;}
+  const status=document.getElementById('ocr-status');
+  if (!document.getElementById('ocr-confirm').checked) {
+    const row=document.getElementById('ocr-confirm-row');
+    row.classList.add('needs-check');
+    row.scrollIntoView({block:'center'});
+    document.getElementById('ocr-confirm').focus();
+    status.textContent='Hãy tích “Tôi đã đối chiếu…” rồi bấm lại để điền.';
+    return;
+  }
   const changes=[];
   for (const check of form.querySelectorAll('[data-ocr-field]:checked')) {
     const key=check.dataset.ocrField,value=form.querySelector(`[data-ocr-value="${key}"]`).value.trim();
@@ -408,12 +436,15 @@ function applyDocument() {
     input.value=value;
     const valid=input.value===value&&input.checkValidity();
     input.value=old;
-    if (!valid) {document.getElementById('ocr-status').textContent=`${ocrFields[key]} chưa hợp lệ. Sửa kết quả rồi thử lại; chưa điền trường nào.`;return;}
+    if (!valid) {status.textContent=`${ocrFields[key]} chưa hợp lệ. Sửa kết quả rồi thử lại; chưa điền trường nào.`;return;}
     changes.push([input,value]);
   }
   for (const [input,value] of changes) input.value=value;
   document.getElementById('worker-age').value=ageAt(form.elements.ngay_sinh.value);
-  document.getElementById('ocr-status').textContent=changes.length?`Đã điền ${changes.length} trường vào bản nháp. Bấm “Lưu hồ sơ” để ghi nhận.`:'Chưa chọn trường nào để điền.';
+  if (changes.length) {
+    status.textContent=`Đã điền ${changes.length} trường vào bản nháp. Kiểm tra rồi bấm “Lưu hồ sơ”.`;
+    changes[0][0].scrollIntoView({block:'center'});
+  } else status.textContent='Chưa chọn trường nào để điền. Tích ô bên cạnh từng trường cần điền.';
 }
 function eventForm(gate='Cổng chính') {
   const list=activeWorkers();
@@ -515,13 +546,20 @@ document.addEventListener('change',e=>{
     if(['unit_id','phong_o'].includes(e.target.name)) dialog.querySelector('[name="chu_phong"]').checked=false;
     if(['unit_id','phong_o','loai','_manuallyRated'].includes(e.target.name)) syncWorkerControls();
   }
-  if(e.target.id==='ocr-file') {
+  if(e.target.id==='ocr-select-all'){for(const box of document.querySelectorAll('[data-ocr-field]')) box.checked=e.target.checked;}
+  if(e.target.id==='ocr-confirm') document.getElementById('ocr-confirm-row')?.classList.remove('needs-check');
+  if(e.target.id==='ocr-file'||e.target.id==='ocr-camera') {
     resetOcr();
     document.getElementById('ocr-results').innerHTML='';
-    const file=e.target.files[0],preview=document.getElementById('ocr-preview'),read=dialog.querySelector('[data-action="ocr-read"]');
+    const preview=document.getElementById('ocr-preview'),read=dialog.querySelector('[data-action="ocr-read"]');
     preview.hidden=true;preview.removeAttribute('src');read.disabled=true;
-    if(!file){document.getElementById('ocr-status').textContent='Chọn ảnh để bắt đầu.';return;}
-    if(!['image/png','image/jpeg','image/webp'].includes(file.type)||file.size>10*1024*1024){document.getElementById('ocr-status').textContent='Chọn ảnh PNG, JPEG hoặc WebP không quá 10 MB.';e.target.value='';return;}
+    const other=document.getElementById(e.target.id==='ocr-file'?'ocr-camera':'ocr-file');
+    if(other) other.value='';
+    const file=e.target.files[0];
+    if(!file){document.getElementById('ocr-status').textContent='Chọn hoặc chụp ảnh để bắt đầu.';return;}
+    if(['image/heic','image/heif'].includes(file.type)){document.getElementById('ocr-status').textContent='Ảnh HEIC từ iPhone chưa đọc được. Dùng nút “Chụp ảnh” hoặc chọn ảnh JPEG/PNG.';e.target.value='';return;}
+    if(!['image/png','image/jpeg','image/webp'].includes(file.type)){document.getElementById('ocr-status').textContent='Chọn ảnh PNG, JPEG hoặc WebP; ảnh chụp trực tiếp từ camera điện thoại là tốt nhất.';e.target.value='';return;}
+    if(file.size>10*1024*1024){document.getElementById('ocr-status').textContent='Ảnh lớn hơn 10 MB. Chụp lại ở độ phân giải thấp hơn hoặc chọn ảnh nhỏ hơn.';e.target.value='';return;}
     ocrFile=file;ocrPreview=URL.createObjectURL(file);preview.src=ocrPreview;preview.hidden=false;read.disabled=false;
     document.getElementById('ocr-status').textContent='Ảnh chỉ ở trên máy. Bấm “Đọc ảnh trên máy” để nhận diện.';
   }

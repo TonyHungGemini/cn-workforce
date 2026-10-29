@@ -315,7 +315,8 @@ class Handler(BaseHTTPRequestHandler):
                 os.close(file_fd)
             if directory_fd is not None:
                 os.close(directory_fd)
-        self._send(200, body, content_type, api=False)
+        self._send(200, body, content_type, api=False,
+                   cache="private, max-age=604800" if relative.startswith("assets/ocr/") else None)
 
     def _session(self):
         if self.command == "GET":

@@ -59,6 +59,30 @@ test('conflicting candidates are omitted instead of silently overwritten', () =>
   assert.deepEqual(parse('CMND: DEMO-001\nCMND: DEMO-001'), { cmnd: 'DEMO-001' });
 });
 
+test('phone-photo noise around labels still fills the six document fields', () => {
+  const text = [
+    'CONG HÒA XÃ HOI CHỦ NGHĨA VIỆT NAM',
+    'CHUNG MINH NHAN DAN',
+    '| Ngày sinh: 12/05/1990',
+    ': | Giới tính: Nam',
+    '| Nơi sinh: Tình Mẫu',
+    '| Dia chỉ thường trú" Số 12, Đường Minh Hoa, Xã M',
+    'sb: DEMO-123456789',
+  ].join('\n');
+  assert.deepEqual(parse(text), {
+    ngay_sinh: '1990-05-12', gioi_tinh: 'M', noi_sinh: 'Tình Mẫu',
+    dia_chi: 'Số 12, Đường Minh Hoa, Xã M', cmnd: 'DEMO-123456789',
+  });
+  assert.deepEqual(parse('Gi6i tinh: Nu\nS6: 123456789'), { gioi_tinh: 'F', cmnd: '123456789' });
+});
+
+test('bare So never turns an address or a phone-like line into a document number', () => {
+  for (const line of ['Số 12, Đường Minh Hoa', 'So 12 Duong Minh Hoa, Xa Mau', 'Số 12 34 56 78', 'So 123/45 Duong 678, To 9', 'Số: 12345']) {
+    assert.deepEqual(parse(line), {}, line);
+  }
+  assert.deepEqual(parse('Số: 123 456 789'), { cmnd: '123 456 789' });
+});
+
 test('bounded input and values, no truncation into plausible document fields', () => {
   assert.deepEqual(parse(null), {});
   assert.deepEqual(parse({ toString() { throw Error('not a string'); } }), {});
@@ -241,10 +265,10 @@ test('container signatures and dimension limits are checked before image decodin
   assert.equal(state.decoded, 5);
 });
 
-test('verified image dimensions are downscaled to a longest side of 2200', async () => {
+test('verified image dimensions are downscaled to a longest side of 1800', async () => {
   const { api, state } = browser({ width: 4400, height: 2200 });
   await api.recognize(png(4400, 2200));
-  assert.deepEqual(state.canvasSize, [2200, 1100]);
+  assert.deepEqual(state.canvasSize, [1800, 900]);
   const mismatch = browser({ width: 799, height: 600 });
   await assert.rejects(mismatch.api.recognize(png()));
   assert.equal(mismatch.state.closed, 1); assert.equal(mismatch.state.workers.length, 0);
