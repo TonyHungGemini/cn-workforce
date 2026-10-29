@@ -148,3 +148,73 @@ dialog:has(#worker-form) .dialog-footer{position:sticky;bottom:0;z-index:2;backg
   .id-photo-grid{gap:9px}
   .profile-avatar{width:52px;height:62px}
 }
+
+/* ---- Thẻ ID A7, mã QR và bản in ---- */
+#print-area{display:none}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:10px;letter-spacing:.2px;overflow-wrap:anywhere}
+.row-actions{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.row-actions .button{min-height:30px;padding:5px 9px;font-size:9px}
+.page-heading .button.card-action{min-height:38px}
+.card-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:20px 16px;padding:20px;justify-items:center}
+.card-tile{display:flex;flex-direction:column;align-items:center;gap:8px;width:100%}
+.card-tile-actions{display:flex;gap:6px;flex-wrap:wrap;justify-content:center}
+.card-tile-actions .button{min-height:30px;padding:6px 10px;font-size:9px}
+.card-tile-actions .button .icon{width:13px;height:13px}
+.card-note{margin:0;font-size:9px;line-height:1.5;color:#a57b36;text-align:center;max-width:70mm}
+.id-card{width:74mm;height:105mm;display:flex;flex-direction:column;background:#fff;border:1px solid #dbe4dd;border-radius:2.4mm;overflow:hidden;color:#1b3a2c;box-shadow:0 6px 20px #123c3214;flex-shrink:0;print-color-adjust:exact;-webkit-print-color-adjust:exact}
+.id-card-head{display:flex;justify-content:space-between;align-items:center;gap:2mm;padding:2.6mm 3mm;background:#123c32;color:#fff}
+.id-card-brand{display:flex;align-items:center;gap:1.6mm;font-size:3.1mm;font-weight:600;line-height:1.15;letter-spacing:.03mm}
+.id-card-brand img{width:6.8mm;height:6.8mm;background:#fff;border-radius:1.4mm;padding:.35mm;flex-shrink:0}
+.id-card-brand small{display:block;font-size:1.85mm;letter-spacing:.42mm;font-weight:400;color:#a9c4b3;margin-top:.4mm}
+.id-card-kind{font-size:2.35mm;font-weight:600;letter-spacing:.3mm;text-align:right;line-height:1.4;max-width:30mm}
+.id-card-kind small{display:block;font-size:1.8mm;font-weight:400;letter-spacing:.28mm;color:#a9c4b3}
+.id-card-body{flex:1;display:grid;grid-template-columns:23mm minmax(0,1fr);gap:2.6mm;padding:3mm;align-items:start}
+.id-card-photo{width:23mm;height:30mm;border-radius:1.6mm;object-fit:cover;background:#eef3ef;border:1px solid #e2eae4;display:block}
+.card-initials{display:flex;align-items:center;justify-content:center;font-size:7mm;font-weight:600;color:#7b957f;letter-spacing:.4mm}
+.id-card-info{min-width:0}
+.id-card-info h3{margin:0 0 1.2mm;font-size:3.9mm;line-height:1.25;font-weight:600;letter-spacing:-.04mm;overflow-wrap:anywhere;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.id-card-code{margin:0 0 2mm;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:2.5mm;font-weight:600;color:#2f6b50;letter-spacing:.02mm;overflow-wrap:anywhere}
+.id-card-info dl{margin:0;display:grid;gap:1.1mm}
+.id-card-info dl>div{display:grid;grid-template-columns:9.5mm minmax(0,1fr);gap:1.2mm;font-size:2.35mm;line-height:1.35}
+.id-card-info dt{color:#8a978c;font-weight:400}
+.id-card-info dd{margin:0;color:#2c4a3a;font-weight:500;overflow-wrap:anywhere}
+.id-card-foot{display:flex;align-items:flex-end;gap:2.6mm;padding:2mm 3mm 3mm;border-top:1px solid #edf1ed;background:#fafcf9}
+.id-card-foot .qr{width:19mm;height:19mm;flex-shrink:0}
+.id-card-qr-text{min-width:0;padding-bottom:.4mm}
+.id-card-qr-text b{display:block;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:3.3mm;letter-spacing:.05mm;line-height:1.3}
+.id-card-qr-text small{display:block;font-size:2mm;line-height:1.4;color:#7c8b80}
+.id-card.pending{border-style:dashed;box-shadow:none}
+.id-card.pending .id-card-head{background:#7c6d47}
+.id-card.pending .id-card-kind small{color:#e6dcc0}
+.id-card.visitor .id-card-head{background:#8a5a17}
+.id-card.visitor .id-card-kind small{color:#f0dcb5}
+.id-card.visitor .id-card-body{grid-template-columns:minmax(0,1fr)}
+.id-card.visitor .id-card-info dl>div{grid-template-columns:17mm minmax(0,1fr)}
+.id-card.visitor .visitor-expiry dd{color:#a2571f;font-weight:600}
+.id-card.expired{opacity:.75}
+.id-card.expired .id-card-head{background:#5a6058}
+.profile-card{margin:0 0 18px;padding:14px;border:1px solid var(--border);border-radius:12px;background:#fbfcfb}
+.profile-card-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px}
+.profile-card-head h3{margin:0;font-size:12px;font-weight:600}
+.profile-card-preview{display:flex;justify-content:center;height:82mm;overflow:hidden}
+.profile-card-preview .id-card{transform:scale(.78);transform-origin:top center}
+.profile-card .form-note{margin:12px 0 0}
+.dialog-footer{flex-wrap:wrap}
+#print-area .sheet{display:grid;grid-template-columns:74mm 74mm;grid-auto-rows:105mm;gap:7mm 10mm;justify-content:start}
+@media(max-width:760px){
+  .card-grid{grid-template-columns:1fr;padding:15px;gap:16px}
+  .card-tile-actions .button{min-height:32px;padding:7px 12px;font-size:10px}
+  .card-filters select{flex:1 1 calc(50% - 4px)}
+  .card-filters .button{flex:1 1 100%}
+  .profile-card{padding:10px}
+}
+@media print{
+  @page{size:A4 portrait;margin:8mm}
+  body.printing{background:#fff}
+  body.printing .sidebar,body.printing .app-shell,body.printing #toast,body.printing #dialog{display:none!important}
+  body.printing #print-area{display:block!important}
+  #print-area .sheet{page-break-after:always;break-after:page}
+  #print-area .sheet:last-child{page-break-after:auto;break-after:auto}
+  #print-area .id-card{border:.25mm dashed #bcbcbc;border-radius:0;box-shadow:none}
+  #print-area .id-card-foot .qr{width:19mm;height:19mm}
+}

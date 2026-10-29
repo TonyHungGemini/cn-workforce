@@ -35,6 +35,7 @@ CSP = (
 STATIC_FILES = {
     "index.html": "text/html; charset=utf-8", "app.js": "text/javascript; charset=utf-8",
     "ocr.js": "text/javascript; charset=utf-8", "styles.css": "text/css; charset=utf-8",
+    "qr.js": "text/javascript; charset=utf-8",
     "login.html": "text/html; charset=utf-8", "login.js": "text/javascript; charset=utf-8",
     "manifest.webmanifest": "application/manifest+json; charset=utf-8",
     "sw.js": "text/javascript; charset=utf-8",

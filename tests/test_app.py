@@ -122,7 +122,8 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(48, len({w["id"] for w in data["workers"]}))
         self.assertEqual(48, len({w["person_id"] for w in data["workers"]}))
         self.assertEqual({"source": "Dữ liệu minh họa", "integration": "disconnected",
-                          "transfer_approval": "external"}, data["meta"])
+                          "transfer_approval": "external",
+                          "card_scope": ["DSX01", "DSX02", "DSX03", "DSX06"]}, data["meta"])
         self.assertEqual([], data["transfers"])
         self.assertEqual({
             "units": [{"id": f"DSX{number:02d}", "name": f"Đội sản xuất {number:02d}"} for number in range(1, 9)]
@@ -906,6 +907,8 @@ class StoreTests(unittest.TestCase):
         self.assertEqual("pm-quan-tri-hop-nhat", contract["target"])
         for required in ("SSO", "RBAC", "HMAC", "TLS", "consent", "retention", "event_id", "optimistic"):
             self.assertIn(required, " ".join(contract["notes"]))
+        self.assertIn("C2-xxxx", contract["master_data"]["id_cards"])
+        self.assertIn("KH-ddmmyy", contract["master_data"]["visitor_passes"])
 
     def test_existing_synthetic_json_and_backend_source_are_unchanged(self):
         legacy_fixture = self.root / "unrelated-fixture.json"
@@ -930,6 +933,7 @@ class HTTPTests(unittest.TestCase):
         (self.static / "assets" / "icons").mkdir(parents=True)
         (self.static / "index.html").write_bytes(b"<!doctype html><title>Fictional test fixture</title>")
         (self.static / "app.js").write_bytes(b"'use strict';")
+        (self.static / "qr.js").write_bytes(b"'use strict';")
         (self.static / "styles.css").write_bytes(b"body { color: #123; }")
         (self.static / "assets" / "icons" / "marker.svg").write_bytes(b'<svg xmlns="http://www.w3.org/2000/svg"/>')
         for filename in ("app.py", "store.py", ".env"):
@@ -1139,7 +1143,8 @@ class HTTPTests(unittest.TestCase):
 
     def test_allowed_static_files_and_head(self):
         for path, content_type in (("/", "text/html"), ("/index.html", "text/html"), ("/app.js?v=1", "text/javascript"),
-                                   ("/styles.css", "text/css"), ("/assets/icons/marker.svg", "image/svg+xml")):
+                                   ("/qr.js", "text/javascript"), ("/styles.css", "text/css"),
+                                   ("/assets/icons/marker.svg", "image/svg+xml")):
             with self.subTest(path=path):
                 status, headers, body = self.request("GET", path)
                 self.assertEqual(200, status)

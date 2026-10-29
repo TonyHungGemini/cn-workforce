@@ -15,10 +15,11 @@ function fixture() {
     window:{addEventListener(){}}, location:{hash:'#workers'},
     navigator:{serviceWorker:{register:() => Promise.resolve()}},
     fetch:() => new Promise(() => {}), setTimeout(){},clearTimeout(){},
-    URL,Blob,Intl,Date,console,
+    URL,Blob,Intl,Date,console,TextEncoder,
   });
   const script = fs.readFileSync(path.join(__dirname,'../static/app.js'),'utf8');
-  vm.runInContext(script+'\nglobalThis.helpers={esc,normalize,csvValue,filteredWorkers,workersResults,workerTable,workerList,occupancy,isInside,state,currentRoute,needsReview,disciplineWorkers,ratingText,ageAt,matchesWorker,ocrResultsMarkup,resetWorkerFilters,pendingTransfer,transferPanel,transferBadge};',context);
+  const qrScript = fs.readFileSync(path.join(__dirname,'../static/qr.js'),'utf8');
+  vm.runInContext(qrScript+'\n'+script+'\nglobalThis.helpers={esc,normalize,csvValue,filteredWorkers,workersResults,workerTable,workerList,occupancy,isInside,state,currentRoute,needsReview,disciplineWorkers,ratingText,ageAt,matchesWorker,ocrResultsMarkup,resetWorkerFilters,pendingTransfer,transferPanel,transferBadge,cardCode,qrPayload,kvCode,kvConfirmed,kvNumber,cardNumber,cardScope,inCardScope,cardWorkers,cards,idCardMarkup,visitorCode,visitorExpired,visitorPassMarkup,cardsResults,resetCardFilters,QRCode};',context);
   return {...context.helpers, location:context.location};
 }
 
@@ -133,4 +134,81 @@ test('OCR review escapes content and never preselects existing fields',()=>{
   assert.match(html,/data-ocr-field="ten_that" >/);assert.match(html,/data-ocr-field="cmnd" checked/);
   assert.doesNotMatch(html,/data-ocr-field="nhom_mau"|<script>bad|<b>Mẫu/);
   assert.match(html,/id="ocr-confirm"/);
+});
+
+function companyData(workers=[person()],extra={}) {
+  return {workers,rooms:[],events:[],visitors:[],transfers:[],audit:[],outbox:[],images:{},meta:{card_scope:['DSX01','DSX02','DSX03','DSX06']},...extra};
+}
+test('printed card code follows company, unit, area and serial',()=>{
+  const h=fixture();
+  const w=person({khu_vuc:'KV2'});
+  assert.equal(h.cardCode(w),'CRCK2-DSX02-KV2-001');
+  assert.equal(h.qrPayload(w),'C2-0001');
+  assert.equal(h.qrPayload(person({person_id:'CN-1234'})),'C2-1234');
+  assert.equal(h.kvConfirmed(w),true);
+});
+test('dirty area values normalize and fall back to the team',()=>{
+  const h=fixture();
+  for(const [value,expected,confirmed] of [['KV08','KV8',true],['KVK1','KV1',true],['5','KV5',true],['Khu vực 3','KV3',true],['','KV2',false],['Chưa rõ','KV2',false]]) {
+    const w=person({khu_vuc:value,to:'Tổ 2'});
+    assert.equal(h.kvCode(w),expected,value);
+    assert.equal(h.kvConfirmed(w),confirmed,value);
+  }
+});
+test('card scope comes from server meta and other units stay preview only',()=>{
+  const h=fixture(), inside=person(), outside=person({id:'two',unit_id:'NMCB'});
+  h.state.data=companyData([inside,outside]);h.state.unit='all';
+  assert.equal(h.inCardScope(inside),true);assert.equal(h.inCardScope(outside),false);
+  assert.equal(h.cardWorkers().length,1);
+  h.state.cardScopeOnly=false;assert.equal(h.cardWorkers().length,2);
+  h.state.data.meta={};assert.equal(h.inCardScope(inside),false);
+});
+test('card filters combine area, team, type, photo and code search',()=>{
+  const h=fixture();
+  h.state.data=companyData([person({khu_vuc:'KV2'}),person({id:'two',khu_vuc:'KV3'}),person({id:'three',loai:'Gia thuộc',khu_vuc:'KV2'}),person({id:'four',person_id:'CN-0004',khu_vuc:'KV2',to:'Tổ 3'})],{images:{one:{photo:true}}});
+  h.state.unit='all';h.state.cardKv='KV2';h.state.cardPhoto='yes';
+  assert.equal(h.cardWorkers().length,1);assert.equal(h.cardWorkers()[0].id,'one');
+  h.state.cardPhoto='no';h.state.cardType='Gia thuộc';
+  assert.equal(h.cardWorkers().length,1);assert.equal(h.cardWorkers()[0].id,'three');
+  h.state.cardType='all';h.state.cardTeam='Tổ 3';h.state.cardQuery='crck2-dsx02-kv2-004';
+  assert.equal(h.cardWorkers().length,1);assert.equal(h.cardWorkers()[0].id,'four');
+});
+test('search finds a worker by QR payload and printed code',()=>{
+  const h=fixture();h.state.data=companyData([person({khu_vuc:'KV2'})]);h.state.unit='all';
+  assert.equal(h.matchesWorker(person({khu_vuc:'KV2'}),'C2-0001'),true);
+  assert.equal(h.matchesWorker(person({khu_vuc:'KV2'}),'KV2-001'),true);
+  assert.equal(h.matchesWorker(person({khu_vuc:'KV2'}),'C2-0002'),false);
+});
+test('card markup escapes text and embeds a self-contained QR',()=>{
+  const h=fixture();h.state.data=companyData();
+  const html=h.idCardMarkup(person({ten_that:'<img onerror=alert(1)>',khu_vuc:'<b>KV2</b>',phong_o:'<script>x</script>'}));
+  assert.doesNotMatch(html,/<img onerror|<b>KV2|<script>x/);
+  assert.match(html,/class="id-card"/);assert.match(html,/<svg class="qr"/);
+  assert.match(html,/C2-0001/);assert.match(html,/CRCK2-DSX02-KV2-001/);
+  assert.match(h.idCardMarkup(person({unit_id:'NMCB'})),/id-card pending/);
+});
+test('visitor passes get a per-day code, expiry and QR',()=>{
+  const h=fixture();
+  const at=hour=>new Date(2026,9,29,hour).toISOString();
+  const early={id:'v1',name:'Khách A',company:'Nhà cung cấp',unit_id:'DSX02',host:'Anh B',purpose:'Giao hàng',expected:'2026-10-29',created_at:at(8),status:'registered'};
+  const late={id:'v2',name:'Khách B',company:'Đối tác',unit_id:'DSX02',host:'Chị C',purpose:'Họp',expected:'2026-10-29',created_at:at(10),status:'registered'};
+  h.state.data=companyData([person()],{visitors:[late,early]});
+  assert.equal(h.visitorCode(early),'KH-291026-0001');
+  assert.equal(h.visitorCode(late),'KH-291026-0002');
+  assert.equal(h.visitorExpired({expected:'2026-10-29'}),false);
+  assert.equal(h.visitorExpired({expected:'2000-01-01'}),true);
+  const html=h.visitorPassMarkup({...early,name:'<b>Khách A</b>'});
+  assert.match(html,/id-card visitor/);assert.match(html,/KH-291026-0001/);assert.match(html,/<svg class="qr"/);
+  assert.doesNotMatch(html,/<b>Khách A/);
+  assert.match(h.visitorPassMarkup({...early,expected:'2000-01-01'}),/id-card visitor expired/);
+});
+test('cards page lists tiles, clamps pages and escapes the visitor panel',()=>{
+  const h=fixture();
+  const workers=Array.from({length:13},(_,i)=>person({id:`w${i}`,person_id:`CN-${String(i+1).padStart(4,'0')}`,khu_vuc:'KV2'}));
+  h.state.data=companyData(workers,{visitors:[{id:'v1',name:'<img onerror=x>',company:'C',unit_id:'DSX02',host:'H',purpose:'P',expected:'2999-01-01',created_at:new Date(2026,9,29,9).toISOString(),status:'registered'}]});
+  h.state.unit='all';h.state.cardPage=5;
+  const html=h.cards();
+  assert.match(html,/Thẻ ID & QR/);assert.equal(h.state.cardPage,2);
+  assert.match(html,/Trang 2 \/ 2/);assert.match(html,/Thẻ khách/);
+  assert.doesNotMatch(html,/<img onerror/);
 });

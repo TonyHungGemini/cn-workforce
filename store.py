@@ -283,6 +283,7 @@ class Store:
                     "source": "Dữ liệu công ty" if imported else "Dữ liệu minh họa",
                     "integration": "disconnected",
                     "transfer_approval": "external",
+                    "card_scope": ["DSX01", "DSX02", "DSX03", "DSX06"],
                 },
             }
 
@@ -620,6 +621,8 @@ class Store:
                 "gate_events": "Sự kiện bất biến; entity_id là UUID lượt cổng, entity_version = 1",
                 "visitors": "UUID riêng; person_id rỗng, phiên bản tăng theo chuyển trạng thái",
                 "room_transfers": "UUID riêng; gồm phòng đi, phòng đích và trạng thái chờ/chấp nhận/từ chối",
+                "id_cards": "Mã in CRCK2-<đơn vị>-<KV>-<3 số>; QR chỉ chứa C2-xxxx, không chứa tên hay giấy tờ",
+                "visitor_passes": "Mã KH-ddmmyy-#### cấp trong ngày, hết hạn cuối ngày đăng ký",
                 "ownership": "Bản nháp; chưa xác lập nguồn dữ liệu chủ với hệ thống đích",
             },
             "events": list(EVENT_TYPES),
@@ -635,5 +638,7 @@ class Store:
                 "Trước tích hợp thật cần SSO, RBAC, webhook HMAC, TLS, consent và retention được phê duyệt.",
                 "Phiên demo cục bộ không phải cơ chế xác thực hoặc phân quyền.",
                 "Duyệt chuyển phòng chỉ qua token máy chủ; giao diện này không bật nút duyệt.",
+                "Mã thẻ và mã QR được suy ra tại máy khách từ person_id; QR không chứa thông tin cá nhân.",
+                "Mã thẻ in kèm khu vực tại thời điểm cấp; khi đổi khu vực cần in lại thẻ, QR vẫn giữ nguyên.",
             ],
         }
