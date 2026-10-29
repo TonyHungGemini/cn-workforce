@@ -46,6 +46,7 @@ Không dùng khoá admin/tài khoản cá nhân. Thư mục ảnh vẫn chỉ c�
    - `CN_SEED_DEMO=0`: **bắt buộc** để máy chủ không tạo 48 hồ sơ minh họa trước khi nhận dữ liệu thật. Khi có `CN_SYNC_TOKEN`, app cũng tự tắt seed nếu biến này chưa đặt.
 4. Deploy. Mở `https://<tên-app>.onrender.com/healthz` phải trả `{"ok":true,...}`.
 5. Gói Free ngủ sau khoảng 15 phút không có truy cập; lần mở đầu tiên chậm khoảng 30–60 giây. Dữ liệu vẫn còn vì app khôi phục từ tệp sao lưu trên Drive khi khởi động.
+6. Để push lên `main` là tự triển khai, service phải để **Auto-Deploy: On Commit** *và* **Render GitHub App phải được cài vào repo** (`github.com/<chủ-repo>/<repo>/settings/installations`). Thiếu app này thì cài đặt On Commit vẫn đúng nhưng Render không nhận được sự kiện push. Sửa `render.yaml` thì phải vào **Blueprints → Manual sync → Approve**.
 
 ## 4. Đưa dữ liệu thật lần đầu lên máy chủ
 
