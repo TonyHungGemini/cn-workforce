@@ -44,7 +44,7 @@ const routes = [
   ['cards','Thẻ ID & QR','card'],
   ['reports','Báo cáo & Thống kê','chart'],['integration','Tích hợp App mẹ','link'],['roadmap','Sơ đồ & Lộ trình','map'],
 ];
-const state = {data:null,unit:'all',query:'',type:'all',team:'all',status:'active',room:'',missing:false,blood:'all',quality:'all',page:1,disciplineQuery:'',disciplineStatus:'all',cardQuery:'',cardTeam:'all',cardKv:'all',cardType:'all',cardPhoto:'all',cardScopeOnly:true,cardPage:1,session:null};
+const state = {data:null,unit:'all',query:'',type:'all',team:'all',status:'active',room:'',missing:false,blood:'all',quality:'all',page:1,disciplineQuery:'',disciplineStatus:'all',cardQuery:'',cardTeam:'all',cardKv:'all',cardType:'all',cardPhoto:'all',cardScopeOnly:true,cardPage:1,gateGate:'Cổng chính',gateArea:'',session:null};
 const main = document.getElementById('main');
 const dialog = document.getElementById('dialog');
 const pageSize = 10;
@@ -143,12 +143,13 @@ function resetOcr() {
 }
 function showModal(title,content,footer='') {
   resetOcr();
+  stopGateCamera();
   if (!dialog.open) opener = document.activeElement;
   dialog.innerHTML = `<div class="dialog-head"><h2 id="dialog-title">${title}</h2><button class="icon-button" data-action="close" aria-label="Đóng hộp thoại">${icon('x')}</button></div>${content}${footer ? `<div class="dialog-footer">${footer}</div>` : ''}`;
   if (!dialog.open) dialog.showModal();
 }
 function closeModal() { dialog.close(); }
-dialog.addEventListener('close', () => { resetOcr(); if (opener?.isConnected) opener.focus(); });
+dialog.addEventListener('close', () => { resetOcr(); stopGateCamera(); if (opener?.isConnected) opener.focus(); });
 dialog.addEventListener('click', e => { if(e.target === dialog){const r=dialog.getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom) closeModal();} });
 function personCell(w) { return `<div class="person-cell">${avatarMarkup(w)}<button class="person-link" data-action="detail" data-id="${esc(w.id)}"><b>${esc(w.ten_that)}</b><small>${esc(w.person_id)} · ${esc(w.unit_id)}</small></button></div>`; }
 function profileStatus(w) { return w.status === 'archived' ? badge('Đã lưu trữ','gray') : w.cmnd ? badge('Có thông tin giấy tờ') : badge('Thiếu giấy tờ','amber'); }
@@ -319,16 +320,192 @@ function transferPanel() {
   const row=t=>`<tr><td>${esc(name(t.worker_id))}<br><span class="filter-meta">${esc(t.from_unit)} · ${esc(t.from_team)}</span></td><td>${esc(t.from_room||'Chưa rõ')}</td><td>${esc(t.to_room)}<br><span class="filter-meta">${esc(units[t.to_unit]||t.to_unit)}</span></td><td>${esc(t.note||'—')}</td><td>${fmtDate(t.created_at)}<br><span class="filter-meta">${fmtTime(t.created_at)}</span></td><td>${transferBadge(t.status)}</td></tr>`;
   return `<section class="panel"><div class="panel-heading"><div><h2>Chờ chấp nhận chuyển phòng</h2><p>Hồ sơ đã rời phòng cũ và chờ phân quyền App mẹ xác nhận</p></div>${badge(`${pending.length} yêu cầu`,'amber')}</div>${pending.length?`<div class="table-wrap"><table>${head}<tbody>${pending.map(row).join('')}</tbody></table></div>`:'<p class="demo-caption" style="padding:0 21px 18px">Chưa có yêu cầu nào đang chờ. Dùng nút “Chuyển phòng ở” để tạo yêu cầu.</p>'}${decided.length?`<div class="panel-heading"><div><h2>Đã xử lý gần đây</h2><p>5 yêu cầu mới nhất trong phạm vi đang xem</p></div></div><div class="table-wrap"><table>${head}<tbody>${decided.map(row).join('')}</tbody></table></div>`:''}</section>`;
 }
+const GATE_OVERDUE_HOURS = 12;
+const GATE_AREAS = ['Khu khai thác','Bãi khai thác','Khu chế biến','Kho nguyên liệu','Khu ở','Khu vực mỏ','Cổng chính','Cổng khu ở'];
+const checkResults = {match:['Khớp thẻ',''],mismatch:['Không khớp','red'],unknown:['Không nhận diện','amber']};
+const methodLabel = method => method === 'qr' ? 'Quét QR' : 'Thủ công';
+const spotChecks = () => state.data?.spot_checks || [];
+function scopedChecks() { const list=spotChecks(); return state.unit==='all'?list:list.filter(c=>c.unit_id===state.unit||!c.unit_id); }
+function lastGateEvent(id) { return state.data.events.filter(e=>e.worker_id===id).sort((a,b)=>b.at.localeCompare(a.at))[0]; }
+function insideSince(id) { const event=lastGateEvent(id); return event?.direction==='in'?event:null; }
+const hoursInside = at => (Date.now()-new Date(at).getTime())/36e5;
+function durationText(at) {
+  const minutes=Math.max(0,Math.floor((Date.now()-new Date(at).getTime())/60000));
+  const hours=Math.floor(minutes/60);
+  return hours?`${hours} giờ ${minutes%60} phút`:`${minutes} phút`;
+}
+function parseScanCode(raw) {
+  const code=String(raw??'').trim().toUpperCase();
+  const match=code.match(/^(?:C2|CN)-(\d{1,4})$/);
+  if (match) return `CN-${match[1].padStart(4,'0')}`;
+  if (/^\d{1,4}$/.test(code)) return `CN-${code.padStart(4,'0')}`;
+  return '';
+}
+function resolveScan(raw) {
+  const code=String(raw??'').trim().toUpperCase();
+  if (!code) return {kind:'empty',code};
+  const visitor=state.data.visitors.find(v=>visitorCode(v)===code);
+  if (visitor) return {kind:'visitor',code,visitor,expired:visitorExpired(visitor)};
+  const person=parseScanCode(code);
+  const workers=state.data.workers;
+  const worker=(person&&workers.find(w=>w.person_id===person))||workers.find(w=>cardCode(w)===code);
+  if (!worker) return {kind:'unknown',code};
+  return {kind:worker.status==='active'?'worker':'archived',code,worker};
+}
+let gateStream=null, gateScanTimer=null, gateDetector=null;
+function stopGateCamera(message) {
+  if (gateScanTimer) clearInterval(gateScanTimer);
+  gateScanTimer=null;
+  if (gateStream) gateStream.getTracks().forEach(track=>track.stop());
+  gateStream=null;
+  const video=document.getElementById('gate-video');
+  if (video) video.srcObject=null;
+  const status=document.getElementById('gate-scan-status');
+  if (status) status.textContent=message||'Camera đã tắt. Bạn có thể nhập mã hoặc chụp ảnh thẻ.';
+}
+async function startGateCamera() {
+  const status=document.getElementById('gate-scan-status');
+  stopGateCamera('Đang mở camera…');
+  if (!navigator.mediaDevices?.getUserMedia) { if(status) status.textContent='Trình duyệt không hỗ trợ camera trực tiếp. Hãy nhập mã hoặc chụp ảnh thẻ.'; return; }
+  if (!('BarcodeDetector' in window)) { if(status) status.textContent='Thiết bị chưa hỗ trợ đọc QR trực tiếp. Hãy nhập mã hoặc chụp ảnh thẻ.'; return; }
+  try {
+    const formats=typeof BarcodeDetector.getSupportedFormats==='function'?await BarcodeDetector.getSupportedFormats():null;
+    if (Array.isArray(formats)&&formats.length&&!formats.includes('qr_code')) { if(status) status.textContent='Thiết bị không có bộ đọc QR. Hãy nhập mã hoặc chụp ảnh thẻ.'; return; }
+    gateDetector=new BarcodeDetector({formats:['qr_code']});
+    gateStream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'}},audio:false});
+    const video=document.getElementById('gate-video');
+    if (!video) { stopGateCamera(); return; }
+    video.srcObject=gateStream;
+    await video.play().catch(()=>{});
+    if (status) status.textContent='Đưa mã QR trên thẻ vào khung hình.';
+    gateScanTimer=setInterval(async()=>{
+      if (!gateStream||!video.videoWidth) return;
+      try {
+        const codes=await gateDetector.detect(video);
+        if (codes.length) handleGateScan(codes[0].rawValue,'qr');
+      } catch {}
+    },350);
+  } catch(error) {
+    stopGateCamera(error?.name==='NotAllowedError'?'Bạn chưa cho phép camera. Cấp quyền trong cài đặt trình duyệt hoặc nhập mã thủ công.':'Không mở được camera. Kiểm tra quyền truy cập hoặc nhập mã thủ công.');
+  }
+}
+function handleGateScan(raw,method='manual') {
+  const form=document.getElementById('gate-scan-form');
+  if (!form) return;
+  stopGateCamera(`Đã đọc mã ${raw}.`);
+  form.dataset.method=method;
+  form.elements.code.value=String(raw??'').toUpperCase();
+  showGateResult(resolveScan(raw),form.dataset.mode,method);
+}
+async function decodeGatePhoto(input) {
+  const file=input.files?.[0], status=document.getElementById('gate-scan-status');
+  if (!file) return;
+  input.value='';
+  if (!('BarcodeDetector' in window)) { if(status) status.textContent='Thiết bị chưa hỗ trợ đọc QR từ ảnh. Hãy nhập mã thẻ.'; return; }
+  if (!['image/png','image/jpeg','image/webp'].includes(file.type)) { if(status) status.textContent='Chọn ảnh PNG, JPEG hoặc WebP. Ảnh HEIC từ iPhone chưa đọc được.'; return; }
+  try {
+    const bitmap=await createImageBitmap(file);
+    const codes=await new BarcodeDetector({formats:['qr_code']}).detect(bitmap);
+    bitmap.close?.();
+    if (!codes.length) { if(status) status.textContent='Không tìm thấy mã QR trong ảnh. Chụp rõ phần mã rồi thử lại.'; return; }
+    handleGateScan(codes[0].rawValue,'qr');
+  } catch { if(status) status.textContent='Không đọc được ảnh này. Thử ảnh khác hoặc nhập mã thẻ.'; }
+}
+function resolveGateForm(form) {
+  const error=form.querySelector('.form-error'), raw=String(form.elements.code.value||'').trim();
+  if (!raw) { error.textContent='Nhập mã thẻ hoặc bật camera để quét.'; return; }
+  error.textContent='';
+  form.elements.code.value=raw.toUpperCase();
+  showGateResult(resolveScan(raw),form.dataset.mode,form.dataset.method||'manual');
+}
+function gateFacts(w) {
+  return `<dl class="gate-facts"><div><dt>Đơn vị</dt><dd>${esc(units[w.unit_id]||w.unit_id)}</dd></div><div><dt>Tổ</dt><dd>${esc(w.to||'Chưa cập nhật')}</dd></div><div><dt>Khu vực</dt><dd>${esc(w.khu_vuc||kvCode(w))}</dd></div><div><dt>Phòng</dt><dd>${esc(w.phong_o||'Chưa bố trí')}</dd></div></dl>`;
+}
+function gateWorkerMarkup(scan,method) {
+  const w=scan.worker, since=insideSince(w.id), next=since?'out':'in';
+  return `<div class="gate-result-card ok"><div class="gate-result-head">${avatarMarkup(w)}<div><h3>${esc(w.ten_that)}</h3><p>${esc(w.person_id)} · ${esc(units[w.unit_id]||w.unit_id)} · ${esc(w.to||'')}</p></div>${badge(since?'Đang trong':'Đang ngoài',since?'blue':'gray')}</div>${gateFacts(w)}
+    <p class="form-note">${since?`Lượt vào gần nhất ${fmtTime(since.at)} · ${fmtDate(since.at)} tại ${esc(since.gate)} (${durationText(since.at)}).`:'Chưa có lượt vào đang mở.'} Mã khớp hồ sơ đang hoạt động; vẫn đối chiếu ảnh/khuôn mặt trước khi xác nhận.</p>
+    <form id="gate-record-form" data-worker="${esc(w.id)}" data-method="${method}"><div class="form-grid">${selectField('Chiều qua cổng','direction',[['in','Vào cổng'],['out','Ra cổng']],next)}${selectField('Điểm kiểm soát','gate',[['Cổng chính','Cổng chính'],['Cổng khu ở','Cổng khu ở']],state.gateGate)}</div><div class="form-error" role="alert"></div><div class="row-actions">${button('Hủy','close',null,'secondary','type="button"')}<button class="button primary" type="submit">${icon('check')}Xác nhận ghi nhận</button></div></form></div>`;
+}
+function gateVisitorMarkup(scan,method) {
+  const v=scan.visitor, expired=scan.expired;
+  let action;
+  if (v.status==='registered'&&expired) action='<p class="form-note gate-alert">Thẻ khách đã hết hạn ngày đăng ký. Không xác nhận vào; đề nghị người đón đăng ký lại.</p>';
+  else if (v.status==='registered') action=`<form id="gate-visitor-form" data-id="${esc(v.id)}" data-version="${v.version}" data-status="inside"><div class="form-error" role="alert"></div><div class="row-actions"><button class="button primary" type="submit">${icon('check')}Xác nhận khách vào</button></div></form>`;
+  else if (v.status==='inside') action=`<form id="gate-visitor-form" data-id="${esc(v.id)}" data-version="${v.version}" data-status="left"><div class="form-error" role="alert"></div><div class="row-actions"><button class="button primary" type="submit">${icon('check')}Xác nhận khách ra</button></div></form>`;
+  else action='<p class="form-note">Khách đã rời đơn vị; thẻ không còn hiệu lực.</p>';
+  return `<div class="gate-result-card visitor"><div class="gate-result-head"><span class="avatar">${esc(String(v.name||'').slice(0,1))}</span><div><h3>${esc(v.name)}</h3><p>${esc(v.company||'Khách')} · ${esc(visitorCode(v))}</p></div>${badge(visitorStatus[v.status],v.status==='registered'?'amber':v.status==='left'?'gray':'blue')}</div>
+    <dl class="gate-facts"><div><dt>Đơn vị đến</dt><dd>${esc(units[v.unit_id]||v.unit_id||'—')}</dd></div><div><dt>Người đón</dt><dd>${esc(v.host||'—')}</dd></div><div><dt>Mục đích</dt><dd>${esc(v.purpose||'—')}</dd></div><div><dt>Hạn thẻ</dt><dd>${esc(fmtDate(v.expected))}</dd></div></dl>${action}</div>`;
+}
+function spotCheckForm(scan,method,result) {
+  const area=state.gateArea||'Khu khai thác';
+  const resultField=result==='unknown'
+    ? '<input type="hidden" name="result" value="unknown"><p class="form-note">Mã không khớp hồ sơ; biên bản sẽ ghi “Không nhận diện”.</p>'
+    : `<label class="form-field">Kết quả đối chiếu<select name="result">${selectOptions([['match','Khớp thẻ công nhân'],['mismatch','Không khớp / cần xử lý']],result)}</select></label>`;
+  return `<form id="gate-check-form" data-code="${esc(scan.code)}" data-method="${method}"><div class="form-grid"><label class="form-field">Khu vực kiểm tra *<input name="area" required maxlength="120" list="gate-area-options" value="${esc(area)}"></label>${resultField}${field('Ghi chú','note','','text',false,true,'',300)}</div>
+    <datalist id="gate-area-options">${GATE_AREAS.map(item=>`<option value="${esc(item)}"></option>`).join('')}</datalist>
+    <div class="form-error" role="alert"></div><div class="row-actions">${button('Hủy','close',null,'secondary','type="button"')}<button class="button primary" type="submit">${icon('check')}Lưu biên bản kiểm tra</button></div></form>`;
+}
+function spotCheckMarkup(scan,method) {
+  if (scan.kind==='visitor') return `<div class="gate-result-card warning"><h3>Thẻ khách</h3><p><b>${esc(scan.visitor.name)}</b> · ${esc(scan.code)}. Kiểm tra đột xuất áp dụng cho công nhân; khách được quản lý trong sổ khách.</p></div>`;
+  if (scan.kind==='empty') return '<div class="gate-result-card warning"><h3>Chưa có mã</h3><p>Quét QR hoặc nhập mã thẻ để đối chiếu.</p></div>';
+  if (scan.kind==='unknown') return `<div class="gate-result-card warning"><h3>Không nhận diện thẻ</h3><p>Mã <b class="mono">${esc(scan.code)}</b> không khớp hồ sơ công nhân đang hoạt động.</p>${spotCheckForm(scan,method,'unknown')}</div>`;
+  const w=scan.worker, archived=scan.kind==='archived';
+  return `<div class="gate-result-card ${archived?'danger':'ok'}"><div class="gate-result-head">${avatarMarkup(w)}<div><h3>${esc(w.ten_that)}</h3><p>${esc(w.person_id)} · ${esc(units[w.unit_id]||w.unit_id)}</p></div>${archived?badge('Đã lưu trữ','red'):badge('Hồ sơ hoạt động','')}</div>${gateFacts(w)}${archived?'<p class="form-note gate-alert">Hồ sơ đã lưu trữ. Máy chủ sẽ ép kết quả “Không khớp” dù chọn khớp.</p>':''}${spotCheckForm(scan,method,archived?'mismatch':'match')}</div>`;
+}
+function showGateResult(scan,mode,method) {
+  const host=document.getElementById('gate-result');
+  if (!host) return;
+  host.innerHTML=mode==='check'?spotCheckMarkup(scan,method):(
+    scan.kind==='empty'?'<div class="gate-result-card warning"><h3>Chưa có mã</h3><p>Nhập mã thẻ hoặc bật camera để đối chiếu.</p></div>'
+    :scan.kind==='unknown'?`<div class="gate-result-card warning"><h3>Không nhận diện mã</h3><p>Mã <b class="mono">${esc(scan.code)}</b> không thuộc thẻ công nhân hay thẻ khách đã đăng ký.</p><div class="row-actions">${button('Ghi biên bản kiểm tra','gate-check-code','shield','secondary',`data-code="${esc(scan.code)}"`)}</div></div>`
+    :scan.kind==='archived'?`<div class="gate-result-card danger"><h3>Hồ sơ đã lưu trữ</h3><p><b>${esc(scan.worker.ten_that)}</b> · ${esc(scan.worker.person_id)}. Thẻ không còn hiệu lực qua cổng.</p><div class="row-actions">${button('Mở hồ sơ','detail','arrow','secondary',`data-id="${esc(scan.worker.id)}"`)}${button('Ghi biên bản','gate-check-code','shield','secondary',`data-code="${esc(scan.code)}"`)}</div></div>`
+    :scan.kind==='visitor'?gateVisitorMarkup(scan,method)
+    :gateWorkerMarkup(scan,method)
+  );
+  host.scrollIntoView({behavior:'smooth',block:'nearest'});
+}
+function gateScannerModal(gate=state.gateGate,mode='gate') {
+  state.gateGate=gate||'Cổng chính';
+  const check=mode==='check';
+  showModal(check?'Kiểm tra đột xuất':'Trạm kiểm soát QR',`<div class="dialog-body">
+    ${notice(check?'Quét QR trên thẻ tại khu vực khai thác để xác nhận người đang làm việc có phải công nhân công ty. Biên bản được lưu cùng mã quét, khu vực và kết quả.':'Quét QR trên thẻ để đối chiếu hồ sơ, sau đó xác nhận chiều ra/vào. Camera chỉ chạy trên trình duyệt hỗ trợ và kết nối HTTPS.',true)}
+    <form id="gate-scan-form" data-mode="${mode}" data-method="manual">
+      <div class="gate-scan-stage"><video id="gate-video" playsinline muted autoplay></video><div class="gate-scan-frame" aria-hidden="true"></div><p class="gate-scan-hint" id="gate-scan-status">Bật camera để quét, hoặc nhập mã in trên thẻ.</p></div>
+      <div class="gate-scan-actions">${button('Bật camera','gate-camera','camera','secondary','type="button"')}${button('Dừng camera','gate-camera-stop','x','secondary','type="button"')}<label class="button secondary gate-photo">${icon('camera')}Chụp ảnh thẻ<input id="gate-photo" type="file" accept="image/*" capture="environment" hidden></label></div>
+      <div class="form-grid"><label class="form-field">Mã thẻ / mã QR *<input id="gate-code" name="code" required autocomplete="off" spellcheck="false" placeholder="C2-0001 hoặc CRCK2-..."></label>${check?'':selectField('Điểm kiểm soát','gate',[['Cổng chính','Cổng chính'],['Cổng khu ở','Cổng khu ở']],state.gateGate)}</div>
+      <div class="form-error" role="alert"></div>
+      <div class="row-actions"><button class="button primary" type="submit">${icon('search')}Đối chiếu mã</button></div>
+    </form>
+    <div id="gate-result" class="gate-result" aria-live="polite"></div>
+  </div>`,button('Đóng','close',null,'secondary'));
+  document.getElementById('gate-code')?.focus();
+}
+function insideRows(inside) {
+  if (!inside.length) return '<p class="demo-caption" style="padding:0 21px 18px">Không có công nhân nào đang mở lượt vào cổng.</p>';
+  return `<div class="table-wrap"><table><thead><tr><th>NGƯỜI TRONG CỔNG</th><th>ĐƠN VỊ</th><th>CỔNG VÀO</th><th>THỜI ĐIỂM VÀO</th><th>ĐÃ Ở TRONG</th><th>THAO TÁC</th></tr></thead><tbody>${inside.map(w=>{const since=insideSince(w.id),over=hoursInside(since.at)>GATE_OVERDUE_HOURS;return `<tr><td><b>${esc(w.ten_that)}</b><br><span class="filter-meta">${esc(w.person_id)} · ${esc(w.to||'')}</span></td><td>${esc(units[w.unit_id]||w.unit_id)}</td><td>${esc(since.gate)}</td><td>${fmtTime(since.at)}<br><span class="filter-meta">${fmtDate(since.at)}</span></td><td>${badge(durationText(since.at),over?'amber':'gray')}${over?`<br><span class="filter-meta">Quá ${GATE_OVERDUE_HOURS} giờ</span>`:''}</td><td>${button('Ghi ra','gate-out','arrow','secondary',`data-id="${esc(w.id)}"`)}</td></tr>`;}).join('')}</tbody></table></div>`;
+}
+function checkTable(list) {
+  if (!list.length) return empty('Chưa có biên bản kiểm tra','Dùng nút “Kiểm tra thẻ” để quét QR tại khu vực khai thác.');
+  return `<div class="table-wrap"><table><thead><tr><th>THỜI GIAN</th><th>NGƯỜI / MÃ QUÉT</th><th>KHU VỰC</th><th>KẾT QUẢ</th><th>PHƯƠNG THỨC</th><th>GHI CHÚ</th></tr></thead><tbody>${list.slice(0,20).map(c=>{const [label,color]=checkResults[c.result]||['Chưa rõ','gray'];return `<tr><td>${fmtTime(c.at)}<br><span class="filter-meta">${fmtDate(c.at)}</span></td><td>${c.name?`<b>${esc(c.name)}</b><br><span class="filter-meta">${esc(c.person_id)}</span>`:'<span class="filter-meta">Không có hồ sơ</span>'}<br><span class="mono filter-meta">${esc(c.code)}</span></td><td>${esc(c.area)}</td><td>${badge(label,color)}</td><td>${badge(methodLabel(c.method),c.method==='qr'?'blue':'gray')}</td><td>${esc(c.note||'—')}</td></tr>`;}).join('')}</tbody></table></div>`;
+}
 function eventTable(events) {
   if (!events.length) return empty('Chưa có nhật ký ra/vào','Ghi nhận một lượt vào hoặc ra để bắt đầu theo dõi.');
-  return `<div class="table-wrap"><table><thead><tr><th>THỜI GIAN</th><th>NGƯỜI QUA CỔNG</th><th>ĐƠN VỊ</th><th>ĐIỂM KIỂM SOÁT</th><th>CHIỀU</th><th>PHƯƠNG THỨC</th></tr></thead><tbody>${events.map(e=>`<tr><td>${fmtTime(e.at)}<br><span class="filter-meta">${fmtDate(e.at)}</span></td><td><b>${esc(e.name)}</b><br><span class="filter-meta">${esc(e.person_id)}</span></td><td>${esc(e.unit_id)}</td><td>${esc(e.gate)}</td><td>${badge(e.direction==='in'?'Vào cổng':'Ra cổng',e.direction==='in'?'':'blue')}</td><td>${badge('Ghi nhận thủ công','gray')}</td></tr>`).join('')}</tbody></table></div>`;
+  return `<div class="table-wrap"><table><thead><tr><th>THỜI GIAN</th><th>NGƯỜI QUA CỔNG</th><th>ĐƠN VỊ</th><th>ĐIỂM KIỂM SOÁT</th><th>CHIỀU</th><th>PHƯƠNG THỨC</th></tr></thead><tbody>${events.map(e=>`<tr><td>${fmtTime(e.at)}<br><span class="filter-meta">${fmtDate(e.at)}</span></td><td><b>${esc(e.name)}</b><br><span class="filter-meta">${esc(e.person_id)}</span></td><td>${esc(e.unit_id)}</td><td>${esc(e.gate)}</td><td>${badge(e.direction==='in'?'Vào cổng':'Ra cổng',e.direction==='in'?'':'blue')}</td><td>${badge(methodLabel(e.method),e.method==='qr'?'blue':'gray')}</td></tr>`).join('')}</tbody></table></div>`;
 }
 function security() {
-  const events=scoped(state.data.events), active=activeWorkers();
-  return heading('Kiểm soát an ninh','Nắm bắt ra/vào, đối chiếu danh tính và lưu dấu thao tác.',button('Ghi nhận ra/vào','new-event','plus'),'AN NINH ĐƠN VỊ')+
-  notice('<b>Chế độ thí điểm thủ công.</b> Chưa kết nối camera, Face ID, máy quét QR hoặc thanh chắn. Nhật ký này không được tự động dùng để tính công.')+
-  `<div class="metrics">${metric('Đang ở trong cổng',active.filter(w=>isInside(w.id)).length,'người','Theo sự kiện gần nhất','people')}${metric('Lượt vào hôm nay',events.filter(e=>e.direction==='in'&&new Date(e.at).toDateString()===new Date().toDateString()).length,'lượt','Ghi nhận trên bản demo','gate')}${metric('Lượt ra hôm nay',events.filter(e=>e.direction==='out'&&new Date(e.at).toDateString()===new Date().toDateString()).length,'lượt','Ghi nhận trên bản demo','arrow')}${metric('Khách đang ở trong',scoped(state.data.visitors).filter(v=>v.status==='inside').length,'người','Theo sổ khách minh họa','visitors')}</div>`+
-  `<div class="gate-grid">${['Cổng chính','Cổng khu ở'].map(g=>`<section class="gate-card"><span class="gate-symbol">${icon('gate')}</span><div><h3>${g}</h3><p>${events.filter(e=>e.gate===g).length} sự kiện trong nhật ký</p>${badge('Chưa kết nối thiết bị','amber')}</div>${button('Ghi nhận','new-event','plus','secondary',`data-gate="${g}"`)}</section>`).join('')}</div><section class="panel"><div class="panel-heading"><div><h2>Nhật ký ra/vào</h2><p>Không chỉnh sửa hoặc xóa sự kiện đã ghi nhận</p></div>${button('Xuất nhật ký','export-events','download','text-button')}</div>${eventTable(events)}</section>`;
+  const events=scoped(state.data.events), active=activeWorkers(), list=scopedChecks();
+  const day=new Date().toDateString();
+  const today=events.filter(e=>new Date(e.at).toDateString()===day);
+  const todayChecks=list.filter(c=>new Date(c.at).toDateString()===day);
+  const inside=active.filter(w=>isInside(w.id)).sort((a,b)=>String(insideSince(a.id)?.at||'').localeCompare(String(insideSince(b.id)?.at||'')));
+  return heading('Kiểm soát an ninh','Quét QR thẻ để đối chiếu, ghi nhật ký ra/vào và kiểm tra đột xuất tại khu vực.',button('Quét QR tại cổng','gate-scan','camera','primary',`data-gate="${state.gateGate}"`)+button('Ghi nhận thủ công','new-event','plus','secondary'),'AN NINH ĐƠN VỊ')+
+  notice('<b>Giao thức QR giai đoạn 1.</b> Không cần máy quét chuyên dụng: bảo vệ dùng camera điện thoại trong App để đọc mã in trên thẻ, đối chiếu hồ sơ rồi xác nhận ra/vào. Mọi lượt quét và biên bản kiểm tra đều lưu vết, không sửa hay xóa.',true)+
+  `<div class="metrics">${metric('Đang ở trong cổng',inside.length,'người','Theo lượt vào chưa đóng','people')}${metric('Lượt vào hôm nay',today.filter(e=>e.direction==='in').length,'lượt',`${today.filter(e=>e.direction==='in'&&e.method==='qr').length} lượt quét QR`,'gate')}${metric('Lượt ra hôm nay',today.filter(e=>e.direction==='out').length,'lượt',`${today.filter(e=>e.direction==='out'&&e.method==='qr').length} lượt quét QR`,'arrow')}${metric('Kiểm tra đột xuất',todayChecks.length,'biên bản',`${todayChecks.filter(c=>c.result!=='match').length} cần xử lý`,'shield')}</div>`+
+  `<section class="panel"><div class="panel-heading"><div><h2>Trạm kiểm soát QR</h2><p>Chọn cổng để quét thẻ, hoặc nhập tay khi camera không khả dụng</p></div>${badge('QR · Giai đoạn 1','blue')}</div><div class="gate-grid">${['Cổng chính','Cổng khu ở'].map(g=>{const gateEvents=events.filter(e=>e.gate===g),qr=gateEvents.filter(e=>e.method==='qr').length;return `<section class="gate-card"><span class="gate-symbol">${icon('gate')}</span><div class="gate-card-body"><h3>${g}</h3><p>${gateEvents.length} lượt trong nhật ký · ${qr} lượt quét QR</p>${badge(qr?'QR đang dùng':'Chưa có lượt QR',qr?'':'amber')}</div><div class="gate-actions">${button('Quét QR','gate-scan','camera','primary',`data-gate="${g}"`)}${button('Nhập tay','new-event','plus','secondary',`data-gate="${g}"`)}</div></section>`;}).join('')}</div></section>`+
+  `<section class="panel"><div class="panel-heading"><div><h2>Đang trong cổng</h2><p>Danh sách mở theo lượt vào gần nhất; quá ${GATE_OVERDUE_HOURS} giờ được đánh dấu</p></div>${badge(`${inside.length} người`,'gray')}</div>${insideRows(inside)}</section>`+
+  `<section class="panel"><div class="panel-heading"><div><h2>Kiểm tra đột xuất</h2><p>Đối chiếu thẻ tại khu vực khai thác · 20 biên bản gần nhất</p></div><div class="row-actions">${button('Kiểm tra thẻ','gate-check','shield','secondary')}${button('Xuất biên bản','export-checks','download','text-button')}</div></div>${checkTable(list)}</section>`+
+  `<section class="panel"><div class="panel-heading"><div><h2>Nhật ký ra/vào</h2><p>Không chỉnh sửa hoặc xóa sự kiện đã ghi nhận</p></div>${button('Xuất nhật ký','export-events','download','text-button')}</div>${eventTable(events)}</section>`;
 }
 const visitorStatus = {registered:'Đã đăng ký',inside:'Đang ở trong',left:'Đã rời đi'};
 function visitors() {
@@ -620,6 +797,17 @@ async function action(el) {
     return;
   }
   if(type==='new-event') return eventForm(el.dataset.gate);
+  if(type==='gate-scan') return gateScannerModal(el.dataset.gate||state.gateGate,'gate');
+  if(type==='gate-check') return gateScannerModal(el.dataset.gate||state.gateGate,'check');
+  if(type==='gate-camera') return startGateCamera();
+  if(type==='gate-camera-stop') return stopGateCamera();
+  if(type==='gate-check-code'){gateScannerModal(state.gateGate,'check');return handleGateScan(el.dataset.code,'manual');}
+  if(type==='gate-out'){
+    const worker=state.data.workers.find(item=>item.id===id), since=worker&&insideSince(worker.id);
+    if(!worker||!since) return toast('Hồ sơ không có lượt vào đang mở.');
+    showModal('Ghi nhận ra cổng',`<form id="gate-out-form" data-id="${esc(worker.id)}"><div class="dialog-body"><p>Ghi nhận <b>${esc(worker.ten_that)}</b> (${esc(worker.person_id)}) ra khỏi cổng?</p><p>Lượt vào lúc ${fmtTime(since.at)} · ${fmtDate(since.at)} tại ${esc(since.gate)}.</p>${selectField('Điểm kiểm soát','gate',[['Cổng chính','Cổng chính'],['Cổng khu ở','Cổng khu ở']],since.gate)}<div class="form-error" role="alert"></div></div><div class="dialog-footer">${button('Hủy','close',null,'secondary','type="button"')}<button class="button primary" type="submit">${icon('check')}Xác nhận ra cổng</button></div></form>`);
+    return;
+  }
   if(type==='new-transfer') return transferForm();
   if(type==='new-visitor') return visitorForm();
   if(type==='print-card'){
@@ -665,7 +853,8 @@ async function action(el) {
   }
   if(type==='export-discipline') return csv('theo-doi-lao-dong',['Mã hồ sơ','Họ tên','Đơn vị','Tổ','Kỹ năng','Đạo đức & Kỷ luật','Ngày ghi nhận','Hình thức','Trạng thái','Phụ trách','Nội dung'],disciplineWorkers().map(w=>[w.person_id,w.ten_that,w.unit_id,w.to,ratingText(w,'danh_gia_ky_nang'),ratingText(w,'danh_gia_dao_duc'),w.ngay_ky_luat,w.hinh_thuc_ky_luat,w.trang_thai_ky_luat,w.nguoi_lap_bien_ban,w.ghi_chu_ky_luat]));
   if(type==='export-rooms') return csv(isImported()?'cu-tru-cong-ty':'cu-tru-minh-hoa',['Phòng','Đơn vị','Sức chứa','Số người','Vượt sức chứa'],scoped(state.data.rooms).map(r=>[r.id,r.unit_id,r.capacity,occupancy(r),occupancy(r)>r.capacity?'Có':'Không']));
-  if(type==='export-events') return csv(isImported()?'nhat-ky-cong-ty':'nhat-ky-minh-hoa',['Thời gian','Mã hồ sơ','Tên','Đơn vị','Cổng','Chiều','Phương thức'],scoped(state.data.events).map(e=>[e.at,e.person_id,e.name,e.unit_id,e.gate,e.direction,'Thủ công']));
+  if(type==='export-events') return csv(isImported()?'nhat-ky-cong-ty':'nhat-ky-minh-hoa',['Thời gian','Mã hồ sơ','Tên','Đơn vị','Cổng','Chiều','Phương thức'],scoped(state.data.events).map(e=>[e.at,e.person_id,e.name,e.unit_id,e.gate,e.direction==='in'?'Vào cổng':'Ra cổng',methodLabel(e.method)]));
+  if(type==='export-checks') return csv('bien-ban-kiem-tra-dot-xuat',['Thời gian','Mã quét','Họ tên','Mã hồ sơ','Đơn vị','Khu vực','Kết quả','Phương thức','Ghi chú'],scopedChecks().map(c=>[c.at,c.code,c.name,c.person_id,c.unit_id,c.area,(checkResults[c.result]||['Chưa rõ'])[0],methodLabel(c.method),c.note]));
   if(type==='export-contract'){const contract=await api('contract');download('cn-workforce-api-draft.json',JSON.stringify(contract,null,2),'application/json');toast('Đã tải hợp đồng đề xuất, chưa có kết nối thật.');return;}
   if(type==='branch'){const b=branches[Number(id)];showModal(esc(b.title),`<div class="dialog-body">${badge(b.sub,'gray')}<ul class="detail-list">${b.items.map(t=>`<li>${esc(t)}</li>`).join('')}</ul></div>`,button('Đóng','close',null,'secondary')+button('Xem phân hệ','branch-go','arrow','primary',`data-route="${b.route}"`));return;}
   if(type==='branch-go'){closeModal();return go(el.dataset.route);}
@@ -684,7 +873,8 @@ document.addEventListener('click', async e => {
 });
 document.addEventListener('submit', async e => {
   const form=e.target;
-  if(!['worker-form','event-form','visitor-form','archive-form','visitor-transition-form','transfer-form'].includes(form.id)) return;
+  if(form.id==='gate-scan-form'){e.preventDefault();resolveGateForm(form);return;}
+  if(!['worker-form','event-form','visitor-form','archive-form','visitor-transition-form','transfer-form','gate-record-form','gate-check-form','gate-visitor-form','gate-out-form'].includes(form.id)) return;
   e.preventDefault();const submit=form.querySelector('[type="submit"]'),errorEl=form.querySelector('.form-error');submit.disabled=true;errorEl.textContent='';
   try {
     let body=Object.fromEntries(new FormData(form)), path, message;
@@ -697,6 +887,19 @@ document.addEventListener('submit', async e => {
       message='Đã lưu hồ sơ vào cơ sở dữ liệu cục bộ.';
     }
     if(form.id==='event-form'){path='events';message='Đã ghi nhận nhật ký ra/vào thủ công.';}
+    if(form.id==='gate-record-form'){
+      const method=form.dataset.method==='qr'?'qr':'manual';
+      path='events';body={worker_id:form.dataset.worker,direction:body.direction,gate:body.gate,method};
+      message=method==='qr'?'Đã ghi nhận ra/vào bằng quét QR.':'Đã ghi nhận ra/vào tại cổng.';
+    }
+    if(form.id==='gate-check-form'){
+      const method=form.dataset.method==='qr'?'qr':'manual', area=String(body.area||'').trim();
+      path='checks';body={code:form.dataset.code,area,result:body.result,note:body.note||'',method};
+      message=body.result==='match'?'Đã lưu biên bản: thẻ khớp công nhân công ty.':'Đã lưu biên bản kiểm tra để xử lý.';
+      state.gateArea=area;
+    }
+    if(form.id==='gate-visitor-form'){path='visitors/transition';body={id:form.dataset.id,version:Number(form.dataset.version),status:form.dataset.status};message=form.dataset.status==='inside'?'Đã xác nhận khách vào.':'Đã xác nhận khách rời.';}
+    if(form.id==='gate-out-form'){path='events';body={worker_id:form.dataset.id,direction:'out',gate:body.gate,method:'manual'};message='Đã ghi nhận ra cổng.';}
     if(form.id==='visitor-form'){path='visitors';message='Đã đăng ký khách. Chưa xác nhận vào cổng.';}
     if(form.id==='archive-form'){path='workers/archive';body={id:form.dataset.id,version:Number(form.dataset.version)};message='Đã lưu trữ hồ sơ và giải phóng phòng ở.';}
     if(form.id==='visitor-transition-form'){path='visitors/transition';body={id:form.dataset.id,version:Number(form.dataset.version),status:form.dataset.status};message='Đã cập nhật trạng thái khách.';}
@@ -717,6 +920,7 @@ document.addEventListener('input',e=>{
   if(e.target.name==='ngay_sinh'&&e.target.closest('#worker-form')) document.getElementById('worker-age').value=ageAt(e.target.value);
 });
 document.addEventListener('change',e=>{
+  if(e.target.id==='gate-photo'){decodeGatePhoto(e.target);return;}
   const filter={'type-filter':'type','team-filter':'team','status-filter':'status','blood-filter':'blood','quality-filter':'quality'}[e.target.id];
   if(filter){state[filter]=e.target.value;state.page=1;document.getElementById('workers-results').innerHTML=workersResults();}
   const cardFilter={'card-team-filter':'cardTeam','card-kv-filter':'cardKv','card-type-filter':'cardType','card-photo-filter':'cardPhoto'}[e.target.id];

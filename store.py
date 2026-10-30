@@ -39,8 +39,11 @@ READ_ONLY = {"id", "person_id", "status", "version", "updated_at"}
 EVENT_TYPES = (
     "worker.created", "worker.updated", "worker.archived", "gate.in", "gate.out",
     "visitor.registered", "visitor.inside", "visitor.left",
-    "transfer.requested", "transfer.approved", "transfer.rejected",
+    "transfer.requested", "transfer.approved", "transfer.rejected", "gate.check",
 )
+CHECK_RESULTS = ("match", "mismatch", "unknown")
+CHECK_METHODS = ("qr", "manual")
+CARD_PREFIX = "CRCK2"
 
 
 class APIError(Exception):
@@ -108,6 +111,37 @@ def iso_date(value, field, required=False):
     return value
 
 
+def card_number(worker):
+    digits = re.sub(r"\D", "", str(worker.get("person_id") or ""))
+    return int(digits) if digits else 0
+
+
+def kv_number(worker):
+    match = re.search(r"\d+", str(worker.get("khu_vuc") or ""))
+    if match and 0 < int(match.group()) < 100:
+        return int(match.group())
+    match = re.search(r"\d+", str(worker.get("to") or ""))
+    value = int(match.group()) if match else 0
+    return value if 0 < value < 100 else 0
+
+
+def card_code(worker):
+    return f"{CARD_PREFIX}-{worker.get('unit_id', '')}-KV{kv_number(worker)}-{card_number(worker):03d}"
+
+
+def card_person_id(code):
+    """Đổi mã quét được thành person_id; trả None nếu là thẻ khách hoặc mã lạ."""
+    value = str(code or "").strip().upper()
+    if not value or value.startswith("KH-"):
+        return None
+    match = re.fullmatch(r"(?:C2|CN)-([0-9]{1,4})", value)
+    if match:
+        return f"CN-{int(match.group(1)):04d}"
+    if re.fullmatch(r"[0-9]{1,4}", value):
+        return f"CN-{int(value):04d}"
+    return None
+
+
 def uuid_field(value, field="id"):
     value = text(value, field, required=True)
     try:
@@ -161,6 +195,8 @@ class Store:
             "CREATE TABLE IF NOT EXISTS legacy_links (legacy_id INTEGER PRIMARY KEY, worker_id TEXT NOT NULL UNIQUE REFERENCES workers(id))",
             "CREATE TABLE IF NOT EXISTS transfers (id TEXT PRIMARY KEY, worker_id TEXT NOT NULL REFERENCES workers(id), from_unit TEXT NOT NULL, from_team TEXT NOT NULL, from_room TEXT NOT NULL, to_unit TEXT NOT NULL, to_team TEXT NOT NULL, to_room TEXT NOT NULL, note TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, decided_at TEXT NOT NULL, decision_note TEXT NOT NULL)",
             "CREATE INDEX IF NOT EXISTS transfers_worker ON transfers(worker_id, status)",
+            "CREATE TABLE IF NOT EXISTS spot_checks (id TEXT PRIMARY KEY, worker_id TEXT NOT NULL, person_id TEXT NOT NULL, name TEXT NOT NULL, unit_id TEXT NOT NULL, code TEXT NOT NULL, area TEXT NOT NULL, result TEXT NOT NULL, note TEXT NOT NULL, method TEXT NOT NULL, at TEXT NOT NULL)",
+            "CREATE INDEX IF NOT EXISTS spot_checks_at ON spot_checks(at DESC)",
         )
         with self.transaction() as connection:
             for statement in statements:
@@ -276,6 +312,7 @@ class Store:
                 "events": [dict(row) for row in connection.execute("SELECT * FROM events ORDER BY at DESC, rowid DESC")],
                 "visitors": [json.loads(row["data"]) for row in connection.execute("SELECT data FROM visitors ORDER BY created_at DESC, rowid DESC")],
                 "transfers": [dict(row) for row in connection.execute("SELECT * FROM transfers ORDER BY created_at DESC, rowid DESC")],
+                "spot_checks": [dict(row) for row in connection.execute("SELECT * FROM spot_checks ORDER BY at DESC, rowid DESC")],
                 "audit": [dict(row) for row in connection.execute("SELECT * FROM audit ORDER BY at DESC, rowid DESC")],
                 "outbox": [dict(row) for row in connection.execute("SELECT * FROM outbox ORDER BY occurred_at DESC, rowid DESC")],
                 "images": self._image_index(connection),
@@ -540,24 +577,27 @@ class Store:
             transfer = dict(connection.execute("SELECT * FROM transfers WHERE id = ?", (transfer_id,)).fetchone())
             return {"ok": True, "transfer": transfer, "worker": result_worker}
 
-    def _insert_event(self, connection, worker, direction, gate, at):
+    def _insert_event(self, connection, worker, direction, gate, at, method="manual"):
         event = {
             "id": identifier(), "worker_id": worker["id"], "person_id": worker["person_id"], "name": worker["ten_that"],
-            "unit_id": worker["unit_id"], "gate": gate, "direction": direction, "method": "manual", "at": at,
+            "unit_id": worker["unit_id"], "gate": gate, "direction": direction, "method": method, "at": at,
         }
         connection.execute(
             "INSERT INTO events(id, worker_id, person_id, name, unit_id, gate, direction, method, at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             tuple(event[key] for key in ("id", "worker_id", "person_id", "name", "unit_id", "gate", "direction", "method", "at")),
         )
-        self._record(connection, f"gate.{direction}", event["id"], worker["person_id"], worker["unit_id"], 1,
-                     "Ghi nhận vào cổng thủ công." if direction == "in" else "Ghi nhận ra cổng thủ công.", at)
+        scanned = method == "qr"
+        summary = ("Ghi nhận vào cổng bằng quét QR." if direction == "in" else "Ghi nhận ra cổng bằng quét QR.") if scanned \
+            else ("Ghi nhận vào cổng thủ công." if direction == "in" else "Ghi nhận ra cổng thủ công.")
+        self._record(connection, f"gate.{direction}", event["id"], worker["person_id"], worker["unit_id"], 1, summary, at)
         return event
 
     def add_event(self, payload):
-        schema(payload, {"worker_id", "direction", "gate"}, {"worker_id", "direction", "gate"})
+        schema(payload, {"worker_id", "direction", "gate", "method"}, {"worker_id", "direction", "gate"})
         worker_id = uuid_field(payload["worker_id"], "worker_id")
         direction = choice(payload["direction"], "direction", ("in", "out"))
         gate = choice(payload["gate"], "gate", GATES)
+        method = choice(payload.get("method", "manual"), "method", CHECK_METHODS)
         with self.transaction() as connection:
             worker = self._worker(connection, worker_id)
             if worker["status"] != "active":
@@ -568,8 +608,51 @@ class Store:
                 raise APIError(409, "Công nhân đã ở bên trong.")
             if direction == "out" and not inside:
                 raise APIError(409, "Cần có lượt vào cổng trước khi ghi nhận ra.")
-            event = self._insert_event(connection, worker, direction, gate, timestamp())
+            event = self._insert_event(connection, worker, direction, gate, timestamp(), method)
             return {"ok": True, "event": event}
+
+    def _worker_by_card(self, connection, code):
+        person_id = card_person_id(code)
+        if person_id:
+            row = connection.execute("SELECT data FROM workers WHERE person_id = ?", (person_id,)).fetchone()
+            if row is not None:
+                return json.loads(row["data"])
+        value = str(code or "").strip().upper()
+        if value.startswith(f"{CARD_PREFIX}-"):
+            for row in connection.execute("SELECT data FROM workers"):
+                worker = json.loads(row["data"])
+                if card_code(worker) == value:
+                    return worker
+        return None
+
+    def add_check(self, payload):
+        schema(payload, {"code", "area", "result", "note", "method"}, {"code", "area", "result"})
+        code = text(payload["code"], "code", required=True, maximum=60).upper()
+        area = text(payload["area"], "area", required=True, maximum=120)
+        note = text(payload.get("note", ""), "note", maximum=300)
+        method = choice(payload.get("method", "qr"), "method", CHECK_METHODS)
+        claimed = choice(payload["result"], "result", CHECK_RESULTS)
+        at = timestamp()
+        with self.transaction() as connection:
+            worker = self._worker_by_card(connection, code)
+            if worker is None:
+                result, worker_id, person_id, name, unit_id = "unknown", "", "", "", ""
+            else:
+                worker_id, person_id = worker["id"], worker["person_id"]
+                name, unit_id = worker["ten_that"], worker["unit_id"]
+                result = claimed if worker["status"] == "active" else "mismatch"
+            check = {
+                "id": identifier(), "worker_id": worker_id, "person_id": person_id, "name": name, "unit_id": unit_id,
+                "code": code, "area": area, "result": result, "note": note, "method": method, "at": at,
+            }
+            connection.execute(
+                "INSERT INTO spot_checks(id, worker_id, person_id, name, unit_id, code, area, result, note, method, at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                tuple(check[key] for key in ("id", "worker_id", "person_id", "name", "unit_id", "code", "area", "result", "note", "method", "at")),
+            )
+            labels = {"match": "khớp thẻ", "mismatch": "không khớp", "unknown": "không nhận diện được thẻ"}
+            self._record(connection, "gate.check", worker_id or check["id"], person_id, unit_id, 1,
+                         f"Kiểm tra đột xuất tại {area}: {labels[result]} (mã {code}).", at)
+            return {"ok": True, "check": check, "worker": worker}
 
     def _insert_visitor(self, connection, visitor):
         connection.execute("INSERT INTO visitors(id, status, version, created_at, data) VALUES (?, ?, ?, ?, ?)",
@@ -623,6 +706,7 @@ class Store:
                 "room_transfers": "UUID riêng; gồm phòng đi, phòng đích và trạng thái chờ/chấp nhận/từ chối",
                 "id_cards": "Mã in CRCK2-<đơn vị>-<KV>-<3 số>; QR chỉ chứa C2-xxxx, không chứa tên hay giấy tờ",
                 "visitor_passes": "Mã KH-ddmmyy-#### cấp trong ngày, hết hạn cuối ngày đăng ký",
+                "spot_checks": "UUID riêng; mã quét, khu vực, kết quả khớp/không khớp/không nhận diện, ghi chú",
                 "ownership": "Bản nháp; chưa xác lập nguồn dữ liệu chủ với hệ thống đích",
             },
             "events": list(EVENT_TYPES),
@@ -640,5 +724,7 @@ class Store:
                 "Duyệt chuyển phòng chỉ qua token máy chủ; giao diện này không bật nút duyệt.",
                 "Mã thẻ và mã QR được suy ra tại máy khách từ person_id; QR không chứa thông tin cá nhân.",
                 "Mã thẻ in kèm khu vực tại thời điểm cấp; khi đổi khu vực cần in lại thẻ, QR vẫn giữ nguyên.",
+                "Quét QR chỉ xác nhận mã thẻ khớp hồ sơ đang hoạt động; đây chưa phải sinh trắc học hay camera AI.",
+                "Kiểm tra đột xuất do bảo vệ kết luận trên thực địa; máy chủ tự đối chiếu mã và ép kết quả không nhận diện khi mã lạ.",
             ],
         }

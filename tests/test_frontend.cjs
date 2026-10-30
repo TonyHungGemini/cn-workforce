@@ -19,7 +19,7 @@ function fixture() {
   });
   const script = fs.readFileSync(path.join(__dirname,'../static/app.js'),'utf8');
   const qrScript = fs.readFileSync(path.join(__dirname,'../static/qr.js'),'utf8');
-  vm.runInContext(qrScript+'\n'+script+'\nglobalThis.helpers={esc,normalize,csvValue,filteredWorkers,workersResults,workerTable,workerList,occupancy,isInside,state,currentRoute,needsReview,disciplineWorkers,ratingText,ageAt,matchesWorker,ocrResultsMarkup,resetWorkerFilters,pendingTransfer,transferPanel,transferBadge,cardCode,qrPayload,kvCode,kvConfirmed,kvNumber,cardNumber,cardScope,inCardScope,cardWorkers,cards,idCardMarkup,visitorCode,visitorExpired,visitorPassMarkup,cardsResults,resetCardFilters,QRCode};',context);
+  vm.runInContext(qrScript+'\n'+script+'\nglobalThis.helpers={esc,normalize,csvValue,filteredWorkers,workersResults,workerTable,workerList,occupancy,isInside,state,currentRoute,needsReview,disciplineWorkers,ratingText,ageAt,matchesWorker,ocrResultsMarkup,resetWorkerFilters,pendingTransfer,transferPanel,transferBadge,cardCode,qrPayload,kvCode,kvConfirmed,kvNumber,cardNumber,cardScope,inCardScope,cardWorkers,cards,idCardMarkup,visitorCode,visitorExpired,visitorPassMarkup,cardsResults,resetCardFilters,QRCode,parseScanCode,resolveScan,gateWorkerMarkup,gateVisitorMarkup,spotCheckMarkup,checkTable,insideRows,security,eventTable,durationText,methodLabel,spotChecks,scopedChecks,insideSince,GATE_OVERDUE_HOURS};',context);
   return {...context.helpers, location:context.location};
 }
 
@@ -137,7 +137,7 @@ test('OCR review escapes content and never preselects existing fields',()=>{
 });
 
 function companyData(workers=[person()],extra={}) {
-  return {workers,rooms:[],events:[],visitors:[],transfers:[],audit:[],outbox:[],images:{},meta:{card_scope:['DSX01','DSX02','DSX03','DSX06']},...extra};
+  return {workers,rooms:[],events:[],visitors:[],transfers:[],audit:[],outbox:[],images:{},spot_checks:[],meta:{card_scope:['DSX01','DSX02','DSX03','DSX06']},...extra};
 }
 test('printed card code follows company, unit, area and serial',()=>{
   const h=fixture();
@@ -212,5 +212,87 @@ test('cards page lists tiles, clamps pages and escapes the visitor panel',()=>{
   const html=h.cards();
   assert.match(html,/Thẻ ID & QR/);assert.equal(h.state.cardPage,2);
   assert.match(html,/Trang 2 \/ 2/);assert.match(html,/Thẻ khách/);
+  assert.doesNotMatch(html,/<img onerror/);
+});
+test('scan codes normalize to person ids and reject visitor or malformed codes',()=>{
+  const h=fixture();
+  assert.equal(h.parseScanCode('c2-0001'),'CN-0001');
+  assert.equal(h.parseScanCode(' C2-17 '),'CN-0017');
+  assert.equal(h.parseScanCode('CN-4'),'CN-0004');
+  assert.equal(h.parseScanCode('17'),'CN-0017');
+  assert.equal(h.parseScanCode('C2-00001'),'');
+  assert.equal(h.parseScanCode('KH-291026-0001'),'');
+  assert.equal(h.parseScanCode('C2-ABCD'),'');
+});
+test('scan resolution distinguishes workers, cards, visitors, archived records and strangers',()=>{
+  const h=fixture();
+  const pad=n=>String(n).padStart(2,'0'), ymd=d=>`${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+  const visitor={id:'v1',name:'Khách A',company:'C',purpose:'P',host:'H',unit_id:'DSX02',expected:ymd(new Date()),created_at:new Date(2026,9,29,9).toISOString(),status:'registered',version:1};
+  h.state.data=companyData([person(),person({id:'two',person_id:'CN-0002',status:'archived'})],{visitors:[visitor]});
+  h.state.unit='all';
+  assert.equal(h.resolveScan('C2-0001').kind,'worker');
+  assert.equal(h.resolveScan('c2-0001').worker.id,'one');
+  assert.equal(h.resolveScan('CRCK2-DSX02-KV1-001').worker.id,'one');
+  assert.equal(h.resolveScan('C2-0002').kind,'archived');
+  assert.equal(h.resolveScan('C2-9999').kind,'unknown');
+  const scanned=h.resolveScan(h.visitorCode(visitor));
+  assert.equal(scanned.kind,'visitor');assert.equal(scanned.expired,false);
+  assert.equal(h.resolveScan('').kind,'empty');
+});
+test('gate worker card suggests the next direction, escapes names and keeps the scan method',()=>{
+  const h=fixture();
+  h.state.data=companyData([person({ten_that:'<img onerror=alert(1)>'})],{events:[{id:'e1',worker_id:'one',person_id:'CN-0001',name:'Mẫu',unit_id:'DSX02',gate:'Cổng chính',direction:'in',method:'qr',at:new Date().toISOString()}]});
+  h.state.unit='all';
+  const html=h.gateWorkerMarkup({kind:'worker',code:'C2-0001',worker:h.state.data.workers[0]},'qr');
+  assert.doesNotMatch(html,/<img onerror/);
+  assert.match(html,/data-method="qr"/);
+  assert.match(html,/<option value="out" selected>/);
+  assert.match(html,/Đang trong/);
+  assert.match(html,/Xác nhận ghi nhận/);
+});
+test('visitor gate card blocks expired passes but allows leaving',()=>{
+  const h=fixture();
+  h.state.data=companyData([person()],{visitors:[]});
+  h.state.unit='all';
+  const base={id:'v1',name:'Khách A',company:'C',purpose:'P',host:'H',unit_id:'DSX02',expected:'2000-01-01',created_at:new Date(2026,9,29,9).toISOString(),status:'registered',version:1};
+  const blocked=h.gateVisitorMarkup({kind:'visitor',code:'KH-291026-0001',visitor:base,expired:true},'qr');
+  assert.match(blocked,/hết hạn/);assert.doesNotMatch(blocked,/gate-visitor-form/);
+  const leaving=h.gateVisitorMarkup({kind:'visitor',code:'KH-291026-0001',visitor:{...base,status:'inside'},expired:true},'qr');
+  assert.match(leaving,/data-status="left"/);assert.match(leaving,/Xác nhận khách ra/);
+});
+test('spot check markup forces unknown codes and preselects mismatch for archived records',()=>{
+  const h=fixture();h.state.data=companyData();h.state.unit='all';
+  const unknown=h.spotCheckMarkup({kind:'unknown',code:'C2-9999'},'qr');
+  assert.match(unknown,/Không nhận diện/);assert.match(unknown,/name="result" value="unknown"/);
+  assert.match(unknown,/data-code="C2-9999"/);assert.match(unknown,/data-method="qr"/);
+  const archived=h.spotCheckMarkup({kind:'archived',code:'C2-0002',worker:person({id:'two',person_id:'CN-0002',status:'archived'})},'manual');
+  assert.match(archived,/<option value="mismatch" selected>/);
+  assert.match(archived,/data-method="manual"/);assert.match(archived,/Khu vực kiểm tra/);
+});
+test('security console renders gate stations, inside list and spot check register',()=>{
+  const h=fixture();
+  const at=new Date().toISOString();
+  h.state.data=companyData([person()],{
+    events:[{id:'e1',worker_id:'one',person_id:'CN-0001',name:'Hồ sơ mẫu',unit_id:'DSX02',gate:'Cổng chính',direction:'in',method:'qr',at}],
+    spot_checks:[{id:'c1',worker_id:'',person_id:'',name:'',unit_id:'',code:'C2-9999',area:'Khu khai thác',result:'unknown',note:'<b>ghi chú</b>',method:'manual',at}],
+  });
+  h.state.unit='all';
+  let html=h.security();
+  assert.match(html,/Trạm kiểm soát QR/);assert.match(html,/Đang trong cổng/);
+  assert.match(html,/Quét QR/);assert.match(html,/Kiểm tra đột xuất/);
+  assert.match(html,/Không nhận diện/);assert.match(html,/1 người/);
+  assert.doesNotMatch(html,/<b>ghi chú<\/b>/);
+  h.state.unit='DSX02';html=h.security();
+  assert.match(html,/Không nhận diện/);
+  assert.match(html,/Ghi ra/);
+});
+test('event table labels scanned and manual records and escapes gate text',()=>{
+  const h=fixture();
+  const at=new Date().toISOString();
+  const html=h.eventTable([
+    {id:'e1',person_id:'CN-0001',name:'A',unit_id:'DSX02',gate:'<img onerror=x>',direction:'in',method:'qr',at},
+    {id:'e2',person_id:'CN-0002',name:'B',unit_id:'DSX02',gate:'Cổng khu ở',direction:'out',method:'manual',at},
+  ]);
+  assert.match(html,/Quét QR/);assert.match(html,/Thủ công/);
   assert.doesNotMatch(html,/<img onerror/);
 });

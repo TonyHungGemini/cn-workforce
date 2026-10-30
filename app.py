@@ -456,6 +456,7 @@ class Handler(BaseHTTPRequestHandler):
                 "/api/v1/events": self.server.store.add_event,
                 "/api/v1/visitors": self.server.store.add_visitor,
                 "/api/v1/visitors/transition": self.server.store.transition_visitor,
+                "/api/v1/checks": self.server.store.add_check,
             }
             image = IMAGE_PATH.match(path)
             if self.command in ("GET", "HEAD"):

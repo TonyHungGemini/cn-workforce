@@ -21,7 +21,7 @@ PROJECT_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_DIR))
 
 from app import MAX_JSON_BYTES, create_server
-from store import APIError, Store, encode
+from store import APIError, Store, card_code, encode
 
 
 ADDED_TEXT_FIELDS = (
@@ -79,7 +79,7 @@ class StoreTests(unittest.TestCase):
 
     def counts(self):
         result = self.store.bootstrap()
-        return {key: len(result[key]) for key in ("workers", "events", "visitors", "audit", "outbox")}
+        return {key: len(result[key]) for key in ("workers", "events", "visitors", "audit", "outbox", "spot_checks")}
 
     def database_snapshot(self):
         with self.store.transaction(write=False) as connection:
@@ -772,6 +772,52 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(incoming, next(e for e in events if e["id"] == incoming["id"]))
         self.assertEqual(outgoing, next(e for e in events if e["id"] == outgoing["id"]))
 
+    def test_qr_gate_events_keep_method_and_audit(self):
+        worker = self.store.save_worker(fictional_worker())["worker"]
+        before = self.counts()
+        event = self.store.add_event({"worker_id": worker["id"], "direction": "in", "gate": "Cổng chính",
+                                      "method": "qr"})["event"]
+        self.assertEqual("qr", event["method"])
+        after = self.counts()
+        self.assertEqual(before["events"] + 1, after["events"])
+        self.assertEqual(before["audit"] + 1, after["audit"])
+        self.assertEqual(before["outbox"] + 1, after["outbox"])
+        data = self.store.bootstrap()
+        self.assertEqual("gate.in", data["outbox"][0]["event_type"])
+        self.assertEqual("Ghi nhận vào cổng bằng quét QR.", data["audit"][0]["summary"])
+
+    def test_spot_checks_resolve_cards_and_force_unknown_for_strangers(self):
+        worker = self.store.save_worker(fictional_worker(unit_id="DSX02", to="Tổ 2"))["worker"]
+        qr = f"C2-{int(worker['person_id'].split('-')[1]):04d}"
+        before = self.counts()
+        check = self.store.add_check({"code": qr, "area": "Khu khai thác", "result": "match", "method": "qr"})["check"]
+        self.assertEqual(("match", worker["person_id"], worker["id"], "qr"),
+                         (check["result"], check["person_id"], check["worker_id"], check["method"]))
+        after = self.counts()
+        self.assertEqual(before["spot_checks"] + 1, after["spot_checks"])
+        self.assertEqual("gate.check", self.store.bootstrap()["outbox"][0]["event_type"])
+        full = self.store.add_check({"code": card_code(worker), "area": "Bãi khai thác",
+                                     "result": "mismatch", "method": "manual"})["check"]
+        self.assertEqual((worker["id"], "mismatch"), (full["worker_id"], full["result"]))
+        stranger = self.store.add_check({"code": "C2-9999", "area": "Khu chế biến",
+                                         "result": "match", "method": "manual"})["check"]
+        self.assertEqual(("unknown", "", ""), (stranger["result"], stranger["worker_id"], stranger["name"]))
+        self.store.archive_worker({"id": worker["id"], "version": 1})
+        archived = self.store.add_check({"code": qr, "area": "Khu khai thác", "result": "match"})["check"]
+        self.assertEqual("mismatch", archived["result"])
+        persisted = Store(self.root / "data").bootstrap()["spot_checks"]
+        self.assertEqual(4, len(persisted))
+        self.assertEqual({check["id"], full["id"], stranger["id"], archived["id"]}, {row["id"] for row in persisted})
+
+    def test_invalid_spot_checks_are_rejected(self):
+        base = {"code": "C2-0001", "area": "Khu khai thác", "result": "match"}
+        for changes in ({"code": ""}, {"code": 3}, {"area": ""}, {"result": "ok"}, {"method": "camera"},
+                        {"extra": 1}):
+            with self.subTest(changes=changes):
+                self.assert_api_error(400, self.store.add_check, {**base, **changes})
+        self.assert_api_error(400, self.store.add_check, {"code": "C2-0001", "area": "Khu"})
+        self.assert_api_error(400, self.store.add_check, {**base, "note": "x" * 301})
+
     def test_concurrent_gate_and_archive_operations_are_serialized(self):
         worker = self.store.save_worker(fictional_worker())["worker"]
         barrier = threading.Barrier(6)
@@ -807,7 +853,7 @@ class StoreTests(unittest.TestCase):
         worker = self.store.bootstrap()["workers"][0]
         valid = {"worker_id": worker["id"], "direction": "in", "gate": "Cổng chính"}
         for payload in ({}, [], dict(valid, direction="both"), dict(valid, gate="Unknown"),
-                        dict(valid, worker_id=1), dict(valid, method="qr"), dict(valid, at="2020-01-01")):
+                        dict(valid, worker_id=1), dict(valid, method="camera"), dict(valid, at="2020-01-01")):
             with self.subTest(payload=payload):
                 self.assert_api_error(400, self.store.add_event, payload)
         self.assert_api_error(404, self.store.add_event, dict(valid, worker_id=str(uuid.uuid4())))
@@ -1021,6 +1067,11 @@ class HTTPTests(unittest.TestCase):
         self.api("POST", "/api/v1/workers", {"id": worker["id"], "version": 1}, expected=409)
         event = self.api("POST", "/api/v1/events", {"worker_id": worker["id"], "direction": "in", "gate": "Cổng chính"})["event"]
         self.assertEqual("manual", event["method"])
+        check = self.api("POST", "/api/v1/checks", {"code": "C2-0001", "area": "Khu khai thác",
+                                                    "result": "match", "method": "qr"})["check"]
+        self.assertEqual("match", check["result"])
+        self.api("GET", "/api/v1/checks", expected=405)
+        self.api("POST", "/api/v1/checks", {"code": "", "area": "Khu", "result": "match"}, expected=400)
         self.api("POST", "/api/v1/workers/archive", {"id": worker["id"], "version": 2}, expected=409)
         self.api("POST", "/api/v1/events", {"worker_id": worker["id"], "direction": "out", "gate": "Cổng khu ở"})
         self.assertEqual({"ok": True}, self.api("POST", "/api/v1/workers/archive", {"id": worker["id"], "version": 2}))
