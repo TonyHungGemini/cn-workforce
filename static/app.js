@@ -54,6 +54,10 @@ let ocrFile;
 let ocrPreview;
 let ocrResult;
 let ocrController;
+let ocrAiStatus = null;
+let ocrAiIssue = null;
+let ocrAiRequest = null;
+let aiStatusCache = null;
 const currentRoute = () => routes.some(r => r[0] === location.hash.slice(1)) ? location.hash.slice(1) : 'workers';
 const scoped = list => list.filter(item => state.unit === 'all' || item.unit_id === state.unit);
 const activeWorkers = () => scoped(state.data.workers).filter(w => w.status === 'active');
@@ -140,6 +144,7 @@ function resetOcr() {
   ocrController?.abort();
   if (ocrPreview) URL.revokeObjectURL(ocrPreview);
   ocrFile=ocrPreview=ocrResult=ocrController=null;
+  ocrAiStatus=ocrAiIssue=ocrAiRequest=null;
 }
 function showModal(title,content,footer='') {
   resetOcr();
@@ -591,9 +596,36 @@ function cards() {
   visitorPassPanel()+
   `<p class="demo-caption">QR đọc được bằng camera điện thoại; bản này chưa nối máy quét tại cổng. Không in thẻ cho hồ sơ đã lưu trữ.</p>`;
 }
+function aiStateBadge(provider) {
+  const states={ready:['Sẵn sàng',''],cooling:['Tạm nghỉ · hạn mức','amber'],missing_key:['Thiếu khoá','gray']};
+  const [label,color]=states[provider.state]||['Chưa rõ','gray'];
+  return badge(label,color);
+}
+function aiStatusPanelMarkup(status) {
+  const head=(title,description,right='')=>`<div class="panel-heading"><div><h2>${title}</h2><p>${description}</p></div>${right}</div>`;
+  const shell=inner=>`<section class="panel" id="ai-status-panel">${inner}</section>`;
+  if(!status) return shell(head('API đọc thẻ bằng AI','Đang kiểm tra cấu hình máy chủ…'));
+  const providers=status.providers||[],ready=providers.filter(provider=>provider.state==='ready').length,configured=Boolean(status.configured);
+  const table=providers.length?`<div class="table-wrap"><table><thead><tr><th>API</th><th>LOẠI</th><th>TRẠNG THÁI</th><th>HÔM NAY</th><th>HẠN MỨC/NGÀY</th><th>ĐÍCH</th></tr></thead><tbody>${providers.map(provider=>`<tr><td class="mono">${esc(provider.id)}</td><td>${provider.kind==='gemini'?'Gemini':'API riêng'}</td><td>${aiStateBadge(provider)}</td><td>${Number(provider.calls)||0} lượt · ${Number(provider.errors)||0} lỗi · ${Number(provider.quota_hits)||0} hết hạn mức</td><td>${provider.quota_per_day?esc(provider.quota_per_day):'Không đặt'}</td><td>${esc(provider.target||'')}</td></tr>${provider.last_error?`<tr><td colspan="6"><small>Lỗi gần nhất: ${esc(provider.last_error)}</small></td></tr>`:''}`).join('')}</tbody></table></div>`:'';
+  const errors=(status.errors||[]).length?`<div class="notice"><p><b>Cấu hình cần sửa:</b> ${status.errors.map(esc).join(' · ')}</p></div>`:'';
+  const intro=configured
+    ?`<div class="notice neutral"><p>AI đọc thẻ và dịch địa chỉ Khmer khi còn hạn mức. Hết hạn mức, App tự xoay sang API kế tiếp rồi quay về bộ đọc trên máy.</p></div>`
+    :`<div class="notice"><p><b>Chưa có API AI trên máy chủ.</b> Lớp tích hợp đã sẵn sàng; cần lập trình viên App mẹ cung cấp API hiện có và danh sách API dự phòng để kích hoạt. Hiện ảnh chỉ được đọc trên máy, không gửi lên máy chủ.</p></div>`;
+  const actions=(configured?button('Sao chép yêu cầu API','ocr-copy-request','file','secondary'):button('Yêu cầu API & dự phòng','ocr-copy-request','file','primary'))+button('Làm mới','ai-refresh','refresh','secondary');
+  return shell(head('API đọc thẻ bằng AI','Lớp AI phía máy chủ · khoá không hiển thị trong App',configured?badge(`${providers.length} API · ${ready} sẵn sàng`):badge('Chưa kích hoạt','amber'))+intro+errors+table+`<p class="form-note">Cấu hình trên máy chủ bằng <b>GEMINI_API_KEY</b> (Gemini) hoặc <b>CN_OCR_PROVIDERS</b> (JSON danh sách API, có thể gồm API dự phòng). Hết hạn mức: tự nghỉ 10 phút rồi thử lại; ảnh không lưu trên máy chủ.</p>`+actions);
+}
+async function loadAiStatus() {
+  const node=()=>document.getElementById('ai-status-panel');
+  try {
+    aiStatusCache=await fetchOcrStatus();
+    if(node()) node().outerHTML=aiStatusPanelMarkup(aiStatusCache);
+  } catch(error) {
+    if(node()) node().innerHTML=`<div class="panel-heading"><div><h2>API đọc thẻ bằng AI</h2><p>${esc(error.message)}</p></div>${button('Thử lại','ai-refresh','refresh','secondary')}</div>`;
+  }
+}
 function reports() {
   const list=activeWorkers();
-  return heading('Báo cáo & Thống kê','Một nguồn số liệu, từ hồ sơ đến vận hành đơn vị.',button('In báo cáo','print','file','secondary'),'THÔNG TIN ĐIỀU HÀNH')+metrics()+
+  return heading('Báo cáo & Thống kê','Một nguồn số liệu, từ hồ sơ đến vận hành đơn vị.',button('In báo cáo','print','file','secondary'),'THÔNG TIN ĐIỀU HÀNH')+metrics()+aiStatusPanelMarkup(aiStatusCache)+
   `<div class="report-grid">${[['people','Danh sách hồ sơ','Hồ sơ theo bộ lọc đơn vị, gồm mã định danh, phân loại, tổ và phòng ở.','export-workers'],['home','Tình hình cư trú','Sức chứa, số người hiện tại và trạng thái từng phòng ở.','export-rooms'],['shield','Nhật ký an ninh','Thời gian, điểm kiểm soát, người qua cổng và chiều ra/vào.','export-events']].map(([ico,title,desc,action])=>`<section class="panel report-card">${icon(ico)}<h2>${title}</h2><p>${desc}</p>${button('Tải CSV · mở bằng Excel',action,'download','secondary')}</section>`).join('')}</div><div class="dashboard-grid">${composition()}<section class="panel"><div class="panel-heading"><div><h2>Độ đầy đủ dữ liệu</h2><p>Có thông tin không đồng nghĩa đã xác thực</p></div></div>${[['Giấy tờ','cmnd'],['Ngày sinh','ngay_sinh'],['Phòng ở','phong_o'],['Liên hệ','so_dt']].map(([label,key])=>{const n=list.filter(w=>w[key]).length,p=list.length?Math.round(n/list.length*100):0;return `<div class="progress-row"><span>${label}</span><div class="progress-track"><span style="width:${p}%"></span></div><b>${p}%</b></div>`;}).join('')}</section></div>`;
 }
 function integration() {
@@ -608,7 +640,7 @@ const branches = [
   {title:'Hồ sơ & Vòng đời',icon:'people',sub:'Vòng đời hồ sơ · Giai đoạn 1',items:['Tra cứu toàn công ty; giữ tên thật, tên hồ sơ, nhóm máu, cư trú, kỹ năng và kỷ luật 1–5 sao.','Định danh person_id ổn định; lưu trữ thay vì xóa hồ sơ.','Tiếp theo: nhập dữ liệu gốc có đối chiếu, lịch sử điều chuyển, hợp đồng.'],route:'workers'},
   {title:'Cư trú & Gia đình',icon:'home',sub:'Nhân khẩu · Sức chứa · Giai đoạn 1',items:['Liên kết hồ sơ với phòng và đơn vị; theo dõi vượt sức chứa.','Xác minh chủ hộ và quan hệ, không tự suy diễn từ việc cùng phòng.','Tiếp theo: tạm trú, bàn giao, điện nước và tài sản.'],route:'rooms'},
   {title:'An ninh & Ra/vào',icon:'shield',sub:'Thủ công trước · Thiết bị sau',items:['Thí điểm sổ cổng và sổ khách, người vận hành xác nhận.','Sau khảo sát: QR có hạn sử dụng, phân quyền cổng và khung giờ.','Nhận diện khuôn mặt cần cơ sở pháp lý, kiểm tra thủ công và thử nghiệm sai số. Không tự kỷ luật từ AI.'],route:'security'},
-  {title:'Chất lượng & AI',icon:'file',sub:'OCR Khmer · Có người xác nhận',items:['Làm sạch và đối chiếu 567 hồ sơ của bản đóng gói; không công khai dữ liệu thật.','OCR Latin/Việt/Khmer chạy trong trình duyệt, xác nhận trước khi điền; dịch Khmer–Việt bằng AI chưa triển khai.','Ảnh giấy tờ lưu tách mã nguồn, chỉ cấp quyền cần thiết; có chính sách lưu và xóa.'],route:'reports'},
+  {title:'Chất lượng & AI',icon:'file',sub:'OCR Khmer · Có người xác nhận',items:['Làm sạch và đối chiếu 567 hồ sơ của bản đóng gói; không công khai dữ liệu thật.','Bộ đọc trên máy luôn dự phòng; lớp AI máy chủ đã sẵn sàng đọc thẻ và dịch Khmer–Việt, chờ API App mẹ để kích hoạt. Kết quả luôn cần người xác nhận.','Ảnh giấy tờ lưu tách mã nguồn, chỉ cấp quyền cần thiết; có chính sách lưu và xóa.'],route:'reports'},
   {title:'App mẹ & Định danh',icon:'link',sub:'API · SSO · Dữ liệu dùng chung',items:['Thống nhất Công ty → Đơn vị → Tổ và mã người dùng chung.','Phân hệ sở hữu hồ sơ/cư trú/an ninh; App mẹ quản danh mục và tổng hợp.','Chống đồng bộ trùng, xử lý xung đột, ký sự kiện và nhật ký trao đổi.'],route:'integration'},
   {title:'Công – Lương – Sản lượng',icon:'chart',sub:'Kết nối · Không làm trùng phân hệ',items:['Chia sẻ định danh với Trợ lý Lương CS và Lương Khai thác.','Nhật ký vào cổng không tương đương ngày công hoặc sản lượng.','Tổ trưởng → Đơn vị → Kế toán → Ban TGĐ duyệt theo nghiệp vụ App mẹ.'],route:'integration'},
   {title:'Bảo mật & Vận hành',icon:'lock',sub:'Phân quyền · Sao lưu · Kiểm toán',items:['Bắt buộc đăng nhập và phân quyền trước khi chạy dữ liệu thật trên mạng.','Bảo vệ chỉ xem thông tin tối thiểu để xác minh; hạn chế giấy tờ, sức khỏe, gia thuộc.','Kiểm thử mất mạng, khôi phục sao lưu, đồng thời, lưu trữ và thu hồi quyền.'],route:'integration'},
@@ -631,6 +663,7 @@ function render() {
   const tabs=[['workers','Tra cứu','people'],['overview','Tổng quan','overview'],['rooms','Cư trú','home'],['cards','Thẻ ID','card'],['security','An ninh','shield']];
   document.getElementById('mobile-tabs').innerHTML=tabs.map(([key,label,ico])=>`<a href="#${key}" class="${key===route?'active':''}" ${key===route?'aria-current="page"':''}>${icon(ico)}<span>${label}</span></a>`).join('');
   main.innerHTML=({overview,workers,discipline,rooms,security,visitors,cards,reports,integration,roadmap}[route])();
+  if(route==='reports') loadAiStatus();
 }
 function syncChrome() {
   const cloud=Boolean(state.session?.cloud);
@@ -660,7 +693,7 @@ function workerForm(id,scan=false) {
   const w=state.data.workers.find(w=>w.id===id) || {loai:'Lao động',unit_id:state.unit==='all'?'':state.unit,to:teams[0],quan_he:'Khác',gioi_tinh:'',phong_o:'',danh_gia_ky_nang:3,danh_gia_dao_duc:3,_manuallyRated:false};
   showModal(id?'Chỉnh sửa hồ sơ công nhân':'Thêm hồ sơ công nhân',`<form id="worker-form" data-id="${esc(id||'')}" data-version="${w.version||''}"><div class="dialog-body">
     <p class="form-note">Phạm vi toàn công ty · Chọn đúng đơn vị quản lý. ${isImported()?'Dữ liệu công ty đã nhập.':'Chỉ sử dụng thông tin và ảnh minh họa.'}</p>
-    <details class="ocr-panel" id="ocr-panel" ${scan?'open':''}><summary>${icon('file')}Quét CMND / CCCD · Điền nhanh hồ sơ<span>Trên máy</span></summary><div class="ocr-body"><p>Ảnh chỉ được đọc trong trình duyệt, không gửi lên máy chủ hay AI bên ngoài. Kết quả cần kiểm tra; không tự xác thực danh tính.</p><div class="ocr-toolbar"><div class="ocr-sources"><label class="button primary ocr-camera">${icon('camera')}Chụp ảnh<input id="ocr-camera" type="file" accept="image/*" capture="environment" hidden></label><label class="button secondary ocr-upload">${icon('file')}Chọn ảnh có sẵn<input id="ocr-file" type="file" accept="image/*" hidden></label></div><label class="form-field">Ngôn ngữ đọc<select id="ocr-language"><option value="vie+eng">Tiếng Việt + Latin (khuyến nghị)</option><option value="eng">Chỉ chữ Latin / MRZ</option><option value="khm+eng">Tiếng Khmer + Latin</option></select></label></div><p class="form-note">Chụp thẳng mặt trước, đủ sáng, không lóa là đọc tốt nhất. PNG, JPEG, WebP · tối đa 10 MB. Bộ đọc chạy trên máy, không dịch và không gửi ảnh đi đâu; ảnh không lưu kèm hồ sơ.</p><div class="ocr-controls">${button('Đọc ảnh trên máy','ocr-read','file','primary','type="button" disabled')}${button('Dừng đọc','ocr-cancel',null,'secondary','type="button" hidden')}<a href="assets/ocr-sample.png" download="anh-mau-quyet-cmnd.png" class="button secondary">Tải ảnh mẫu</a></div><img id="ocr-preview" alt="Ảnh minh họa đang đối chiếu" hidden><p id="ocr-status" role="status" aria-live="polite">Chọn hoặc chụp ảnh để bắt đầu.</p><div id="ocr-results"></div></div></details>
+    <details class="ocr-panel" id="ocr-panel" ${scan?'open':''}><summary>${icon('file')}Quét CMND / CCCD · Điền nhanh hồ sơ<span>Trên máy · AI khi kích hoạt</span></summary><div class="ocr-body"><p>Khi máy chủ đã cấu hình API AI, ảnh được gửi tới API để đọc thẻ và dịch địa chỉ Khmer; nếu chưa kích hoạt hoặc hết hạn mức, bộ đọc chạy trên máy và ảnh không rời thiết bị. Kết quả cần kiểm tra; không tự xác thực danh tính.</p><div class="ocr-toolbar"><div class="ocr-sources"><label class="button primary ocr-camera">${icon('camera')}Chụp ảnh<input id="ocr-camera" type="file" accept="image/*" capture="environment" hidden></label><label class="button secondary ocr-upload">${icon('file')}Chọn ảnh có sẵn<input id="ocr-file" type="file" accept="image/*" hidden></label></div><label class="form-field">Ngôn ngữ đọc<select id="ocr-language"><option value="vie+eng">Tiếng Việt + Latin (khuyến nghị)</option><option value="eng">Chỉ chữ Latin / MRZ</option><option value="khm+eng">Tiếng Khmer + Latin</option></select></label></div><p class="form-note">Chụp thẳng mặt trước, đủ sáng, không lóa là đọc tốt nhất. PNG, JPEG, WebP · tối đa 10 MB. Ảnh không lưu kèm hồ sơ; khi AI được kích hoạt, ảnh chỉ gửi tới API đã cấu hình và không lưu trên máy chủ.</p><div class="ocr-controls">${button('Đọc ảnh','ocr-read','file','primary','type="button" disabled')}${button('Dừng đọc','ocr-cancel',null,'secondary','type="button" hidden')}<a href="assets/ocr-sample.png" download="anh-mau-quyet-cmnd.png" class="button secondary">Tải ảnh mẫu</a></div><img id="ocr-preview" alt="Ảnh minh họa đang đối chiếu" hidden><p id="ocr-status" role="status" aria-live="polite">Chọn hoặc chụp ảnh để bắt đầu.</p><div id="ocr-results"></div></div></details>
     <h3 class="form-section-title">01 · Danh tính & liên hệ</h3><div class="form-grid">${field('Tên thật / tên hiển thị','ten_that',w.ten_that,'text',true)}${field('Tên trên hồ sơ','ten_ho_so',w.ten_ho_so)}${field('Số CMND / CCCD','cmnd',w.cmnd)}${field('Điện thoại / liên hệ','so_dt',w.so_dt,'tel')}${field('Ngày sinh','ngay_sinh',w.ngay_sinh,'date',false,false,`max="${today()}"`)}${selectField('Giới tính','gioi_tinh',[['','Chưa cập nhật'],['M','Nam'],['F','Nữ']],w.gioi_tinh)}${field('Nơi sinh','noi_sinh',w.noi_sinh,'text',false,false,'',500)}<label class="form-field">Tuổi (tính theo ngày sinh)<input id="worker-age" readonly value="${ageAt(w.ngay_sinh)}" placeholder="Chưa có ngày sinh"></label>${field('Địa chỉ thường trú','dia_chi',w.dia_chi,'text',false,true,'',500)}</div>
     <h3 class="form-section-title">02 · Đơn vị, lao động & cư trú</h3><div class="form-grid">${selectField('Đơn vị quản lý *','unit_id',[['','Chọn đơn vị'],...Object.entries(units)],w.unit_id)}${selectField('Phân loại','loai',[['Lao động','Lao động'],['Gia thuộc','Gia thuộc'],['Khác','Khác']],w.loai)}${selectField('Tổ','to',teams.map(t=>[t,t]),w.to)}${field('Khu vực','khu_vuc',w.khu_vuc)}${field('Phần cây hiện tại','phan_cay',w.phan_cay)}${field('Số bảo hiểm','so_bao_hiem',w.so_bao_hiem)}${selectField('Phòng ở','phong_o',roomOptions(w.unit_id),w.phong_o)}${selectField('Quan hệ cư trú','quan_he',relationshipOptions(w.quan_he),w.quan_he)}${field('Chi tiết nơi ở','chi_tiet_noi_o',w.chi_tiet_noi_o,'text',false,true,'',500)}<label class="check-field full"><input type="checkbox" name="chu_phong" ${w.chu_phong?'checked':''}> Là chủ phòng / đầu mối phòng ở</label></div>
     <h3 class="form-section-title">03 · Nhóm máu</h3><div class="form-grid"><label class="form-field">Nhóm máu<input name="nhom_mau" list="blood-types" value="${esc(w.nhom_mau)}" maxlength="8" placeholder="Chưa xác định"><datalist id="blood-types">${['O','A','B','AB','O+','O-','A+','A-','B+','B-','AB+','AB-','RH-'].map(v=>`<option value="${v}">`).join('')}</datalist></label><p class="form-note">Chỉ ghi theo thông tin đã đối chiếu. Không suy ra từ CMND; không dùng trường này thay cho xét nghiệm y tế.</p></div>
@@ -702,7 +735,8 @@ function detail(id) {
 const ocrFields = {ten_that:'Tên thật',cmnd:'Số CMND / CCCD',ngay_sinh:'Ngày sinh',gioi_tinh:'Giới tính',noi_sinh:'Nơi sinh',dia_chi:'Địa chỉ thường trú'};
 function ocrResultsMarkup(result,existing) {
   const entries=Object.entries(result.fields).filter(([key,value])=>Object.hasOwn(ocrFields,key)&&value);
-  return `<h4>Kết quả đọc · Chưa điền / chưa lưu</h4><p>Đối chiếu và sửa từng giá trị. Trường đang có dữ liệu mặc định không được chọn để tránh ghi đè.</p>${entries.length?`<label class="check-field"><input id="ocr-select-all" type="checkbox">Chọn tất cả trường đọc được</label>`:''}${entries.map(([key,value])=>`<label class="ocr-result-row"><input type="checkbox" data-ocr-field="${key}" ${existing[key]?'':'checked'}><span>${ocrFields[key]}<small>Hiện tại: ${esc(existing[key]||'Trống')}</small></span><input data-ocr-value="${key}" aria-label="Kết quả OCR ${ocrFields[key]}" value="${esc(value)}" maxlength="${key==='dia_chi'||key==='noi_sinh'?500:200}"></label>`).join('')}${entries.length?'':'<p>Chưa tách được trường đáng tin cậy. Chụp lại thẳng và đủ sáng, chọn ngôn ngữ “Tiếng Việt + Latin”, rồi xem văn bản bên dưới để nhập tay.</p>'}<details><summary>Văn bản nhận diện</summary><pre class="ocr-raw">${esc(result.text)}</pre></details><label class="check-field" id="ocr-confirm-row"><input id="ocr-confirm" type="checkbox">Tôi đã đối chiếu các trường được chọn với ảnh.</label>${button('Điền các trường đã chọn','ocr-apply','check','primary',`type="button" ${entries.length?'':'disabled'}`)}`;
+  const source=result.source==='ai'?`Nguồn: AI máy chủ${result.provider?` · ${esc(result.provider)}`:''} · địa chỉ Khmer được dịch tự động`:'Nguồn: bộ đọc trên máy · không dịch, không gửi ảnh đi đâu';
+  return `<h4>Kết quả đọc · Chưa điền / chưa lưu</h4><p>${source}</p><p>Đối chiếu và sửa từng giá trị. Trường đang có dữ liệu mặc định không được chọn để tránh ghi đè.</p>${entries.length?`<label class="check-field"><input id="ocr-select-all" type="checkbox">Chọn tất cả trường đọc được</label>`:''}${entries.map(([key,value])=>`<label class="ocr-result-row"><input type="checkbox" data-ocr-field="${key}" ${existing[key]?'':'checked'}><span>${ocrFields[key]}<small>Hiện tại: ${esc(existing[key]||'Trống')}</small></span><input data-ocr-value="${key}" aria-label="Kết quả OCR ${ocrFields[key]}" value="${esc(value)}" maxlength="${key==='dia_chi'||key==='noi_sinh'?500:200}"></label>`).join('')}${entries.length?'':'<p>Chưa tách được trường đáng tin cậy. Chụp lại thẳng và đủ sáng, chọn ngôn ngữ “Tiếng Việt + Latin”, rồi xem văn bản bên dưới để nhập tay.</p>'}${result.text?`<details><summary>Văn bản nhận diện</summary><pre class="ocr-raw">${esc(result.text)}</pre></details>`:''}<label class="check-field" id="ocr-confirm-row"><input id="ocr-confirm" type="checkbox">Tôi đã đối chiếu các trường được chọn với ảnh.</label>${button('Điền các trường đã chọn','ocr-apply','check','primary',`type="button" ${entries.length?'':'disabled'}`)}`;
 }
 const ocrStages = [
   ['loading tesseract core','Đang tải bộ đọc (lần đầu vài MB)…'],
@@ -723,25 +757,120 @@ function ocrProgressText(progress) {
 function setOcrInputs(disabled) {
   for(const id of ['ocr-file','ocr-camera']){const input=document.getElementById(id);if(input) input.disabled=disabled;}
 }
+function ocrDataUrl(file, maximum=1600, quality=0.82) {
+  return (async()=>{
+    const source=typeof createImageBitmap==='function' ? await createImageBitmap(file) : await new Promise((resolve,reject)=>{
+      const url=URL.createObjectURL(file), image=new Image();
+      image.onload=()=>{URL.revokeObjectURL(url);resolve(image);};
+      image.onerror=()=>{URL.revokeObjectURL(url);reject(new Error('Không giải mã được ảnh để gửi AI.'));};
+      image.src=url;
+    });
+    try {
+      const scale=Math.min(1,maximum/Math.max(source.width,source.height));
+      const canvas=document.createElement('canvas');
+      canvas.width=Math.max(1,Math.round(source.width*scale));
+      canvas.height=Math.max(1,Math.round(source.height*scale));
+      canvas.getContext('2d').drawImage(source,0,0,canvas.width,canvas.height);
+      return canvas.toDataURL('image/jpeg',quality);
+    } finally {
+      if (typeof source.close==='function') source.close();
+    }
+  })();
+}
+async function fetchOcrStatus() {
+  const response=await fetch('/api/v1/ocr/status',{cache:'no-store'});
+  if (response.status===401) {
+    location.href=`/login.html?next=${encodeURIComponent(location.pathname+location.search+location.hash)}`;
+    throw new Error('Phiên đăng nhập đã hết hạn.');
+  }
+  if (!response.ok) throw new Error('Không đọc được trạng thái API AI.');
+  return response.json();
+}
+const aiReady = status => Boolean(status?.configured) && (status.providers||[]).some(provider=>provider.state==='ready');
+function ocrStatusIssue(status) {
+  if (!status) return {error:'failed',message:'Không kiểm tra được API AI.',request:null};
+  if (!status.configured) return {error:'no_provider',message:'Chưa kích hoạt API AI trên máy chủ.',request:status.request};
+  if (!(status.providers||[]).some(provider=>provider.state==='ready')) {
+    return {error:'quota_exhausted',message:'Tất cả API AI đang tạm nghỉ do hết hạn mức hoặc thiếu khoá.',request:status.request};
+  }
+  return null;
+}
+function ocrRequestText(request) {
+  if (!request) return '';
+  const sample=request.sample?JSON.stringify(request.sample,null,2):'';
+  return `${request.text||''}\n\nMẫu cấu hình CN_OCR_PROVIDERS trên máy chủ:\n${sample}`;
+}
+function ocrAiIssueMarkup(issue) {
+  if (!issue) return '';
+  const label=issue.error==='quota_exhausted'?'API AI đã hết hạn mức':issue.error==='no_provider'?'AI chưa được kích hoạt':'AI chưa đọc được ảnh';
+  const request=issue.request||null;
+  return `<div class="notice neutral"><p><b>${label}.</b> ${esc(issue.message||'')} Bộ đọc trên máy là phương án dự phòng.</p></div>`+
+    (request?`<details class="ocr-ai-request"><summary>Yêu cầu lập trình viên cung cấp API & danh sách dự phòng</summary><p class="form-note">Gửi nội dung dưới đây cho lập trình viên App mẹ. Không gửi khoá qua chat; khoá chỉ nhập vào biến môi trường trên máy chủ.</p><textarea readonly rows="10" class="mono" data-ocr-request-text>${esc(ocrRequestText(request))}</textarea><div class="ocr-controls">${button('Sao chép yêu cầu API','ocr-copy-request','file','secondary','type="button"')}</div></details>`:'');
+}
+async function copyOcrRequest() {
+  const request=ocrAiIssue?.request||aiStatusCache?.request;
+  if (!request) return toast('Chưa có mẫu yêu cầu API. Mở trang Báo cáo để tải trạng thái AI.');
+  try {
+    await navigator.clipboard.writeText(ocrRequestText(request));
+    toast('Đã sao chép yêu cầu API. Hãy gửi cho lập trình viên App mẹ.');
+  } catch {
+    const area=document.querySelector('[data-ocr-request-text]');
+    area?.focus(); area?.select();
+    toast('Không sao chép tự động được. Nội dung đã được chọn để sao chép thủ công.');
+  }
+}
 async function readDocument() {
   if (!ocrFile||ocrController) return;
   const form=document.getElementById('worker-form'),status=document.getElementById('ocr-status');
-  const controller=new AbortController();ocrController=controller;ocrResult=null;
+  const controller=new AbortController();ocrController=controller;ocrResult=null;ocrAiIssue=null;
   document.getElementById('ocr-results').innerHTML='';
   form.querySelector('[data-action="ocr-read"]').disabled=true;
   form.querySelector('[data-action="ocr-cancel"]').hidden=false;
   setOcrInputs(true);
   document.getElementById('ocr-language').disabled=true;
-  status.textContent='Đang chuẩn bị công cụ đọc trên máy…';
+  status.textContent='Đang kiểm tra API AI của máy chủ…';
   try {
-    const result=await window.DocumentOCR.recognize(ocrFile,document.getElementById('ocr-language').value,progress=>{
-      if (form.isConnected&&!controller.signal.aborted) status.textContent=ocrProgressText(progress);
-    },controller.signal);
+    let aiStatus=null;
+    try {
+      aiStatus=await fetchOcrStatus();
+      ocrAiStatus=aiStatus; aiStatusCache=aiStatus;
+    } catch(error) {
+      if (controller.signal.aborted) return;
+    }
+    let result=null;
+    if (aiReady(aiStatus)) {
+      status.textContent='Đang gửi ảnh tới AI để đọc thẻ…';
+      try {
+        const image=await ocrDataUrl(ocrFile);
+        const response=await fetch('/api/v1/ocr',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({image}),signal:controller.signal});
+        if (response.status===401) {
+          location.href=`/login.html?next=${encodeURIComponent(location.pathname+location.search+location.hash)}`;
+          throw new Error('Phiên đăng nhập đã hết hạn.');
+        }
+        const data=await response.json().catch(()=>({}));
+        if (!response.ok) ocrAiIssue={error:'failed',message:data.error||`Máy chủ từ chối ảnh (HTTP ${response.status}).`,request:aiStatus.request};
+        else if (data.ok===false) ocrAiIssue=data;
+        else result={fields:data.fields||{},text:'',source:'ai',provider:data.provider||''};
+      } catch(error) {
+        if (controller.signal.aborted) return;
+        ocrAiIssue={error:'failed',message:error.message||'Không gọi được API AI.',request:aiStatus.request};
+      }
+    } else {
+      ocrAiIssue=ocrStatusIssue(aiStatus);
+    }
+    if (form.isConnected&&ocrAiIssue) document.getElementById('ocr-results').innerHTML=ocrAiIssueMarkup(ocrAiIssue);
+    if (!result) {
+      status.textContent=`${ocrAiIssue?`${ocrAiIssue.message} `:''}Đang đọc trên máy…`;
+      result=await window.DocumentOCR.recognize(ocrFile,document.getElementById('ocr-language').value,progress=>{
+        if (form.isConnected&&!controller.signal.aborted) status.textContent=ocrProgressText(progress);
+      },controller.signal);
+      if (!result.source) result={...result,source:'local'};
+    }
     if (!form.isConnected||controller.signal.aborted) return;
     ocrResult=result;
-    status.textContent='Đã đọc ảnh. Kiểm tra kết quả trước khi điền vào hồ sơ.';
+    status.textContent=result.source==='ai'?'AI đã đọc ảnh. Kiểm tra kết quả trước khi điền vào hồ sơ.':'Đã đọc ảnh trên máy. Kiểm tra kết quả trước khi điền vào hồ sơ.';
     const existing=Object.fromEntries(Object.keys(ocrFields).map(key=>[key,form.elements[key].value]));
-    document.getElementById('ocr-results').innerHTML=ocrResultsMarkup(result,existing);
+    document.getElementById('ocr-results').innerHTML=ocrResultsMarkup(result,existing)+ocrAiIssueMarkup(ocrAiIssue);
   } catch(error) {
     if (form.isConnected) status.textContent=controller.signal.aborted?'Đã dừng đọc; chưa thay đổi hồ sơ.':`Không đọc được ảnh: ${error.message}`;
   } finally {
@@ -829,6 +958,8 @@ async function action(el) {
   if(type==='ocr-read') return readDocument();
   if(type==='ocr-cancel') return ocrController?.abort();
   if(type==='ocr-apply') return applyDocument();
+  if(type==='ocr-copy-request') return copyOcrRequest();
+  if(type==='ai-refresh') return loadAiStatus();
   if(type==='edit-worker') return workerForm(id);
   if(type==='detail') return detail(id);
   if(type==='open-image') return imageViewer(id,el.dataset.kind);
@@ -996,7 +1127,7 @@ document.addEventListener('change',e=>{
     if(!['image/png','image/jpeg','image/webp'].includes(file.type)){document.getElementById('ocr-status').textContent='Chọn ảnh PNG, JPEG hoặc WebP; ảnh chụp trực tiếp từ camera điện thoại là tốt nhất.';e.target.value='';return;}
     if(file.size>10*1024*1024){document.getElementById('ocr-status').textContent='Ảnh lớn hơn 10 MB. Chụp lại ở độ phân giải thấp hơn hoặc chọn ảnh nhỏ hơn.';e.target.value='';return;}
     ocrFile=file;ocrPreview=URL.createObjectURL(file);preview.src=ocrPreview;preview.hidden=false;read.disabled=false;
-    document.getElementById('ocr-status').textContent='Ảnh chỉ ở trên máy. Bấm “Đọc ảnh trên máy” để nhận diện.';
+    document.getElementById('ocr-status').textContent='Ảnh chưa được gửi đi. Bấm “Đọc ảnh” để nhận diện; AI dùng khi đã kích hoạt, không thì đọc trên máy.';
   }
 });
 document.getElementById('unit-select').addEventListener('change',e=>{state.unit=e.target.value;state.room='';state.page=1;state.blood='all';render();});

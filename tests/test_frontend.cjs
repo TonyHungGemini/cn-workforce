@@ -19,7 +19,7 @@ function fixture() {
   });
   const script = fs.readFileSync(path.join(__dirname,'../static/app.js'),'utf8');
   const qrScript = fs.readFileSync(path.join(__dirname,'../static/qr.js'),'utf8');
-  vm.runInContext(qrScript+'\n'+script+'\nglobalThis.helpers={esc,normalize,csvValue,filteredWorkers,workersResults,workerTable,workerList,occupancy,isInside,state,currentRoute,needsReview,disciplineWorkers,ratingText,ageAt,matchesWorker,ocrResultsMarkup,resetWorkerFilters,pendingTransfer,transferPanel,transferBadge,cardCode,qrPayload,kvCode,kvConfirmed,kvNumber,cardNumber,cardScope,inCardScope,cardWorkers,cards,idCardMarkup,visitorCode,visitorExpired,visitorPassMarkup,cardsResults,resetCardFilters,QRCode,parseScanCode,resolveScan,gateWorkerMarkup,gateVisitorMarkup,spotCheckMarkup,checkTable,insideRows,security,eventTable,durationText,methodLabel,spotChecks,scopedChecks,insideSince,GATE_OVERDUE_HOURS,hasBarcodeDetector,hasJsQr,qrPayloadFromImageData,qrPayloadFromSource};',context);
+  vm.runInContext(qrScript+'\n'+script+'\nglobalThis.helpers={esc,normalize,csvValue,filteredWorkers,workersResults,workerTable,workerList,occupancy,isInside,state,currentRoute,needsReview,disciplineWorkers,ratingText,ageAt,matchesWorker,ocrResultsMarkup,resetWorkerFilters,pendingTransfer,transferPanel,transferBadge,cardCode,qrPayload,kvCode,kvConfirmed,kvNumber,cardNumber,cardScope,inCardScope,cardWorkers,cards,idCardMarkup,visitorCode,visitorExpired,visitorPassMarkup,cardsResults,resetCardFilters,QRCode,parseScanCode,resolveScan,gateWorkerMarkup,gateVisitorMarkup,spotCheckMarkup,checkTable,insideRows,security,eventTable,durationText,methodLabel,spotChecks,scopedChecks,insideSince,GATE_OVERDUE_HOURS,hasBarcodeDetector,hasJsQr,qrPayloadFromImageData,qrPayloadFromSource,aiStatusPanelMarkup,aiReady,ocrStatusIssue,ocrAiIssueMarkup,ocrRequestText};',context);
   return {...context.helpers, location:context.location, window:context.window};
 }
 
@@ -134,6 +134,37 @@ test('OCR review escapes content and never preselects existing fields',()=>{
   assert.match(html,/data-ocr-field="ten_that" >/);assert.match(html,/data-ocr-field="cmnd" checked/);
   assert.doesNotMatch(html,/data-ocr-field="nhom_mau"|<script>bad|<b>Mẫu/);
   assert.match(html,/id="ocr-confirm"/);
+});
+test('AI request template asks for a working API and a fallback list',()=>{
+  const h=fixture();
+  const request={text:'Cần API hiện có để kích hoạt và danh sách API dự phòng khi hết hạn mức',sample:{providers:[{id:'api-phu',kind:'generic',endpoint:'https://api.example.com/ocr',key_env:'OCR_KEY'}]}};
+  const text=h.ocrRequestText(request);
+  assert.match(text,/dự phòng/);assert.match(text,/CN_OCR_PROVIDERS/);assert.match(text,/api-phu/);
+  const issued=h.ocrAiIssueMarkup({error:'no_provider',message:'<b>mất kết nối</b>',request});
+  assert.match(issued,/Yêu cầu lập trình viên/);assert.match(issued,/data-ocr-request-text/);assert.match(issued,/ocr-copy-request/);
+  assert.doesNotMatch(issued,/<b>mất kết nối<\/b>/);
+  const quota=h.ocrAiIssueMarkup({error:'quota_exhausted',message:'Hết hạn mức',request});
+  assert.match(quota,/hết hạn mức/);assert.match(quota,/Bộ đọc trên máy/);
+});
+test('AI status panel separates ready, cooling and missing key providers',()=>{
+  const h=fixture();
+  const request={text:'Yêu cầu API',sample:{providers:[]}};
+  const html=h.aiStatusPanelMarkup({configured:true,providers:[
+    {id:'api-chinh',kind:'gemini',state:'ready',calls:3,errors:0,quota_hits:0,quota_per_day:200,target:'generativelanguage.googleapis.com',last_error:''},
+    {id:'<img onerror=x>',kind:'generic',state:'cooling',calls:1,errors:1,quota_hits:1,quota_per_day:50,target:'api.example.com',last_error:'<script>bad</script>'},
+    {id:'chua-khoa',kind:'generic',state:'missing_key',calls:0,errors:0,quota_hits:0,quota_per_day:null,target:'api.example.com',last_error:''},
+  ],errors:['<b>sai cấu hình</b>'],request});
+  assert.match(html,/Sẵn sàng/);assert.match(html,/Tạm nghỉ · hạn mức/);assert.match(html,/Thiếu khoá/);
+  assert.match(html,/3 lượt/);assert.match(html,/ocr-copy-request/);
+  assert.doesNotMatch(html,/<img onerror|<script>bad|<b>sai cấu hình/);
+  const off=h.aiStatusPanelMarkup({configured:false,providers:[],errors:[],request});
+  assert.match(off,/Chưa kích hoạt/);assert.match(off,/dự phòng/);
+  assert.equal(h.aiReady(null),false);
+  assert.equal(h.aiReady({configured:true,providers:[{state:'ready'}]}),true);
+  assert.equal(h.aiReady({configured:true,providers:[{state:'cooling'}]}),false);
+  assert.equal(h.ocrStatusIssue({configured:false,providers:[]}).error,'no_provider');
+  assert.equal(h.ocrStatusIssue({configured:true,providers:[{state:'cooling'}]}).error,'quota_exhausted');
+  assert.equal(h.ocrStatusIssue({configured:true,providers:[{state:'ready'}]}),null);
 });
 
 function companyData(workers=[person()],extra={}) {

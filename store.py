@@ -197,6 +197,7 @@ class Store:
             "CREATE INDEX IF NOT EXISTS transfers_worker ON transfers(worker_id, status)",
             "CREATE TABLE IF NOT EXISTS spot_checks (id TEXT PRIMARY KEY, worker_id TEXT NOT NULL, person_id TEXT NOT NULL, name TEXT NOT NULL, unit_id TEXT NOT NULL, code TEXT NOT NULL, area TEXT NOT NULL, result TEXT NOT NULL, note TEXT NOT NULL, method TEXT NOT NULL, at TEXT NOT NULL)",
             "CREATE INDEX IF NOT EXISTS spot_checks_at ON spot_checks(at DESC)",
+            "CREATE TABLE IF NOT EXISTS ocr_usage (provider TEXT NOT NULL, day TEXT NOT NULL, calls INTEGER NOT NULL, errors INTEGER NOT NULL, quota_hits INTEGER NOT NULL, exhausted_at TEXT NOT NULL, PRIMARY KEY(provider, day))",
         )
         with self.transaction() as connection:
             for statement in statements:
@@ -653,6 +654,30 @@ class Store:
             self._record(connection, "gate.check", worker_id or check["id"], person_id, unit_id, 1,
                          f"Kiểm tra đột xuất tại {area}: {labels[result]} (mã {code}).", at)
             return {"ok": True, "check": check, "worker": worker}
+
+    def ocr_usage(self, day=None):
+        day = day or datetime.now(timezone.utc).date().isoformat()
+        with self.transaction(write=False) as connection:
+            rows = connection.execute(
+                "SELECT provider, calls, errors, quota_hits, exhausted_at FROM ocr_usage WHERE day = ?", (day,)
+            ).fetchall()
+        return {row["provider"]: {"calls": row["calls"], "errors": row["errors"],
+                                  "quota_hits": row["quota_hits"], "exhausted_at": row["exhausted_at"]}
+                for row in rows}
+
+    def record_ocr(self, provider, outcome):
+        if outcome not in {"ok", "error", "quota"}:
+            raise ValueError("outcome không hợp lệ")
+        day = datetime.now(timezone.utc).date().isoformat()
+        with self.transaction() as connection:
+            connection.execute(
+                "INSERT INTO ocr_usage(provider, day, calls, errors, quota_hits, exhausted_at) VALUES (?, ?, 0, 0, 0, '') "
+                "ON CONFLICT(provider, day) DO NOTHING", (provider, day))
+            connection.execute(
+                "UPDATE ocr_usage SET calls = calls + 1, errors = errors + ?, quota_hits = quota_hits + ?, "
+                "exhausted_at = CASE WHEN ? = 1 THEN ? ELSE exhausted_at END WHERE provider = ? AND day = ?",
+                (1 if outcome == "error" else 0, 1 if outcome == "quota" else 0,
+                 1 if outcome == "quota" else 0, timestamp(), provider, day))
 
     def _insert_visitor(self, connection, visitor):
         connection.execute("INSERT INTO visitors(id, status, version, created_at, data) VALUES (?, ?, ?, ?, ?)",

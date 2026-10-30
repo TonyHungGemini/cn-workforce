@@ -15,6 +15,7 @@ from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 import backup
+import ocr
 from auth import (SESSION_COOKIE, SESSION_TTL, auth_required, issue_session, parse_cookies,
                   valid_session, verify_code)
 from drive import Drive, DriveError
@@ -23,6 +24,7 @@ from store import APIError, Store
 
 BASE_DIR = Path(__file__).resolve().parent
 MAX_JSON_BYTES = 64 * 1024
+MAX_OCR_BYTES = 6 * 1024 * 1024
 MAX_SYNC_BYTES = 32 * 1024 * 1024
 LOGIN_WINDOW = 600
 LOGIN_ATTEMPTS = 8
@@ -449,7 +451,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._redirect("/login.html")
             if path == "/login.html" and self.server.auth_required:
                 return self._redirect("/")
-            reads = {"/api/v1/bootstrap": self.server.store.bootstrap, "/api/v1/contract": self.server.store.contract}
+            reads = {"/api/v1/bootstrap": self.server.store.bootstrap, "/api/v1/contract": self.server.store.contract,
+                     "/api/v1/ocr/status": lambda: self.server.ocr.status()}
             writes = {
                 "/api/v1/workers": self.server.store.save_worker,
                 "/api/v1/workers/archive": self.server.store.archive_worker,
@@ -459,6 +462,14 @@ class Handler(BaseHTTPRequestHandler):
                 "/api/v1/visitors/transition": self.server.store.transition_visitor,
                 "/api/v1/checks": self.server.store.add_check,
             }
+            if path == "/api/v1/ocr":
+                if self.command != "POST":
+                    raise APIError(405, "Phương thức không được hỗ trợ.")
+                payload = self._body(limit=MAX_OCR_BYTES)
+                try:
+                    return self._json(200, self.server.ocr.recognize(payload.get("image")))
+                except ocr.OcrInputError as error:
+                    raise APIError(400, str(error)) from None
             image = IMAGE_PATH.match(path)
             if self.command in ("GET", "HEAD"):
                 if image:
@@ -531,6 +542,7 @@ def create_server(port=None, data_dir=None, static_root=None, host=None):
         except DriveError as error:
             print(f"[backup] chưa khôi phục được: {error}", flush=True)
     server = DemoServer(port, Store(data_path, seed=seed), static_root, host=host)
+    server.ocr = ocr.Service(server.store)
     if drive is not None:
         server.drive = drive
         server.drive_ready = True

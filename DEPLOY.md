@@ -89,6 +89,20 @@ Không chạy `sync_master.py` trong một Render Cron Job riêng nếu cron đ�
 
 Quy tắc đồng bộ: ĐSX02 thắng ở các trường hồ sơ; hồ sơ mới được tạo; hồ sơ đã có được cập nhật và tăng `version`; hồ sơ thiếu ở master **không bị xoá** mà chỉ được báo trong `sync-report.json`. Ảnh được cập nhật theo `images.json`.
 
+### API AI đọc thẻ CMND (tuỳ chọn)
+
+Bộ đọc trên máy luôn hoạt động. Khi có API AI, máy chủ đọc thẻ và dịch địa chỉ Khmer trước, rồi mới quay về bộ đọc trên máy nếu lỗi hoặc hết hạn mức.
+
+- **Gemini:** đặt `GEMINI_API_KEY` trong Environment của Render. Không dán khoá vào chat, ảnh chụp hay Git.
+- **API riêng / nhiều API dự phòng:** đặt `CN_OCR_PROVIDERS` là mảng JSON, ví dụ:
+  ```json
+  [{"id":"gemini-chinh","kind":"gemini","key_env":"GEMINI_API_KEY","models":["gemini-flash-latest"],"quota_per_day":200},
+   {"id":"api-phu-1","kind":"generic","endpoint":"https://api.example.com/ocr","key_env":"OCR_FALLBACK_1_KEY","quota_per_day":500}]
+  ```
+  API riêng nhận `POST` JSON `{image, mime, fields}` với `Authorization: Bearer <khoá trong key_env>`, trả `{ok:true,data:{...}}` hoặc `{ok:false,error}`. Endpoint phải là HTTPS; HTTP chỉ cho localhost khi thử.
+- **Hết hạn mức (HTTP 402/429):** API đó tạm nghỉ 10 phút, App tự chuyển API kế tiếp. Hết toàn bộ, trang **Báo cáo → API đọc thẻ bằng AI** hiện mẫu yêu cầu để gửi lập trình viên App mẹ xin API hiện có và danh sách dự phòng.
+- Bộ đếm lượt gọi/lỗi/hạn mức lưu trong SQLite; khoá API không bao giờ trả về trình duyệt hay ghi vào nhật ký.
+
 ## 6. Mobile / PWA
 
 - App có manifest, icon, service worker chỉ cache vỏ giao diện (không cache API, không cache ảnh).
