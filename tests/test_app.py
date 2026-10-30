@@ -1059,6 +1059,7 @@ class HTTPTests(unittest.TestCase):
         self.assertIn("frame-ancestors 'none'", headers["Content-Security-Policy"])
         self.assertNotIn("Python", headers["Server"])
         self.assertEqual("no-referrer", headers["Referrer-Policy"])
+        self.assertEqual("camera=(self), microphone=(), geolocation=()", headers["Permissions-Policy"])
 
     def test_all_mutating_endpoints_and_persistence(self):
         worker = self.api("POST", "/api/v1/workers", fictional_worker())["worker"]
