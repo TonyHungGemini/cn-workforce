@@ -196,9 +196,10 @@ dialog:has(#worker-form) .dialog-footer{position:sticky;bottom:0;z-index:2;backg
 .profile-card{margin:0 0 18px;padding:14px;border:1px solid var(--border);border-radius:12px;background:#fbfcfb}
 .profile-card-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px}
 .profile-card-head h3{margin:0;font-size:12px;font-weight:600}
-.profile-card-preview{display:flex;justify-content:center;height:82mm;overflow:hidden}
-.profile-card-preview .id-card{transform:scale(.78);transform-origin:top center}
-.profile-card .form-note{margin:12px 0 0}
+.profile-card-row{display:flex;align-items:center;justify-content:space-between;gap:14px}
+.profile-card-code{margin:0;font-size:12px;overflow-wrap:anywhere}
+.profile-card .form-note{margin:14px 0 0}
+.card-viewer{display:flex;justify-content:center;padding:4px 0 2px}
 .dialog-footer{flex-wrap:wrap}
 #print-area .sheet{display:grid;grid-template-columns:74mm 74mm;grid-auto-rows:105mm;gap:7mm 10mm;justify-content:start}
 @media(max-width:760px){

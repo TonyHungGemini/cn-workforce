@@ -190,17 +190,19 @@ test('card markup escapes text and embeds a self-contained QR',()=>{
 test('visitor passes get a per-day code, expiry and QR',()=>{
   const h=fixture();
   const at=hour=>new Date(2026,9,29,hour).toISOString();
-  const early={id:'v1',name:'Khách A',company:'Nhà cung cấp',unit_id:'DSX02',host:'Anh B',purpose:'Giao hàng',expected:'2026-10-29',created_at:at(8),status:'registered'};
-  const late={id:'v2',name:'Khách B',company:'Đối tác',unit_id:'DSX02',host:'Chị C',purpose:'Họp',expected:'2026-10-29',created_at:at(10),status:'registered'};
-  h.state.data=companyData([person()],{visitors:[late,early]});
-  assert.equal(h.visitorCode(early),'KH-291026-0001');
+  const pad=n=>String(n).padStart(2,'0'), ymd=d=>`${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+  const day={id:'v1',name:'Khách A',company:'Nhà cung cấp',unit_id:'DSX02',host:'Anh B',purpose:'Giao hàng',expected:ymd(new Date()),created_at:at(8),status:'registered'};
+  const late={id:'v2',name:'Khách B',company:'Đối tác',unit_id:'DSX02',host:'Chị C',purpose:'Họp',expected:ymd(new Date()),created_at:at(10),status:'registered'};
+  h.state.data=companyData([person()],{visitors:[late,day]});
+  assert.equal(h.visitorCode(day),'KH-291026-0001');
   assert.equal(h.visitorCode(late),'KH-291026-0002');
-  assert.equal(h.visitorExpired({expected:'2026-10-29'}),false);
-  assert.equal(h.visitorExpired({expected:'2000-01-01'}),true);
-  const html=h.visitorPassMarkup({...early,name:'<b>Khách A</b>'});
+  assert.equal(h.visitorExpired({expected:ymd(new Date(Date.now()+864e5))}),false);
+  assert.equal(h.visitorExpired({expected:ymd(new Date(Date.now()-864e5))}),true);
+  assert.equal(h.visitorExpired({expected:''}),false);
+  const html=h.visitorPassMarkup({...day,name:'<b>Khách A</b>'});
   assert.match(html,/id-card visitor/);assert.match(html,/KH-291026-0001/);assert.match(html,/<svg class="qr"/);
   assert.doesNotMatch(html,/<b>Khách A/);
-  assert.match(h.visitorPassMarkup({...early,expected:'2000-01-01'}),/id-card visitor expired/);
+  assert.match(h.visitorPassMarkup({...day,expected:'2000-01-01'}),/id-card visitor expired/);
 });
 test('cards page lists tiles, clamps pages and escapes the visitor panel',()=>{
   const h=fixture();
