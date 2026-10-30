@@ -980,6 +980,7 @@ class HTTPTests(unittest.TestCase):
         (self.static / "index.html").write_bytes(b"<!doctype html><title>Fictional test fixture</title>")
         (self.static / "app.js").write_bytes(b"'use strict';")
         (self.static / "qr.js").write_bytes(b"'use strict';")
+        (self.static / "jsqr.js").write_bytes(b"'use strict';")
         (self.static / "styles.css").write_bytes(b"body { color: #123; }")
         (self.static / "assets" / "icons" / "marker.svg").write_bytes(b'<svg xmlns="http://www.w3.org/2000/svg"/>')
         for filename in ("app.py", "store.py", ".env"):
@@ -1195,7 +1196,8 @@ class HTTPTests(unittest.TestCase):
 
     def test_allowed_static_files_and_head(self):
         for path, content_type in (("/", "text/html"), ("/index.html", "text/html"), ("/app.js?v=1", "text/javascript"),
-                                   ("/qr.js", "text/javascript"), ("/styles.css", "text/css"),
+                                   ("/qr.js", "text/javascript"), ("/jsqr.js", "text/javascript"),
+                                   ("/styles.css", "text/css"),
                                    ("/assets/icons/marker.svg", "image/svg+xml")):
             with self.subTest(path=path):
                 status, headers, body = self.request("GET", path)

@@ -19,8 +19,8 @@ function fixture() {
   });
   const script = fs.readFileSync(path.join(__dirname,'../static/app.js'),'utf8');
   const qrScript = fs.readFileSync(path.join(__dirname,'../static/qr.js'),'utf8');
-  vm.runInContext(qrScript+'\n'+script+'\nglobalThis.helpers={esc,normalize,csvValue,filteredWorkers,workersResults,workerTable,workerList,occupancy,isInside,state,currentRoute,needsReview,disciplineWorkers,ratingText,ageAt,matchesWorker,ocrResultsMarkup,resetWorkerFilters,pendingTransfer,transferPanel,transferBadge,cardCode,qrPayload,kvCode,kvConfirmed,kvNumber,cardNumber,cardScope,inCardScope,cardWorkers,cards,idCardMarkup,visitorCode,visitorExpired,visitorPassMarkup,cardsResults,resetCardFilters,QRCode,parseScanCode,resolveScan,gateWorkerMarkup,gateVisitorMarkup,spotCheckMarkup,checkTable,insideRows,security,eventTable,durationText,methodLabel,spotChecks,scopedChecks,insideSince,GATE_OVERDUE_HOURS};',context);
-  return {...context.helpers, location:context.location};
+  vm.runInContext(qrScript+'\n'+script+'\nglobalThis.helpers={esc,normalize,csvValue,filteredWorkers,workersResults,workerTable,workerList,occupancy,isInside,state,currentRoute,needsReview,disciplineWorkers,ratingText,ageAt,matchesWorker,ocrResultsMarkup,resetWorkerFilters,pendingTransfer,transferPanel,transferBadge,cardCode,qrPayload,kvCode,kvConfirmed,kvNumber,cardNumber,cardScope,inCardScope,cardWorkers,cards,idCardMarkup,visitorCode,visitorExpired,visitorPassMarkup,cardsResults,resetCardFilters,QRCode,parseScanCode,resolveScan,gateWorkerMarkup,gateVisitorMarkup,spotCheckMarkup,checkTable,insideRows,security,eventTable,durationText,methodLabel,spotChecks,scopedChecks,insideSince,GATE_OVERDUE_HOURS,hasBarcodeDetector,hasJsQr,qrPayloadFromImageData,qrPayloadFromSource};',context);
+  return {...context.helpers, location:context.location, window:context.window};
 }
 
 function person(overrides={}) {
@@ -295,4 +295,17 @@ test('event table labels scanned and manual records and escapes gate text',()=>{
   ]);
   assert.match(html,/Quét QR/);assert.match(html,/Thủ công/);
   assert.doesNotMatch(html,/<img onerror/);
+});
+test('camera scan falls back to the bundled decoder when BarcodeDetector is missing',()=>{
+  const h=fixture();
+  assert.equal(h.hasBarcodeDetector(),false);assert.equal(h.hasJsQr(),false);
+  const frame={data:new Uint8ClampedArray(4),width:2,height:2};
+  assert.equal(h.qrPayloadFromImageData(frame),'');
+  h.window.jsQR=(data,width,height)=>width===2&&height===2?{data:'C2-0001'}:null;
+  assert.equal(h.hasJsQr(),true);
+  assert.equal(h.qrPayloadFromImageData(frame),'C2-0001');
+  assert.equal(h.qrPayloadFromImageData(null),'');
+  h.window.jsQR=()=>{throw new Error('decoder crashed');};
+  assert.equal(h.qrPayloadFromImageData(frame),'');
+  assert.equal(h.qrPayloadFromSource({videoWidth:0,videoHeight:0}),'');
 });

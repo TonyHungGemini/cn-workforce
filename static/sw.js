@@ -1,8 +1,8 @@
 'use strict';
 
-const CACHE = 'cn-shell-v6';
+const CACHE = 'cn-shell-v7';
 const SHELL = [
-  '/', '/styles.css', '/app.js', '/qr.js', '/login.html', '/login.js', '/manifest.webmanifest',
+  '/', '/styles.css', '/app.js', '/qr.js', '/jsqr.js', '/login.html', '/login.js', '/manifest.webmanifest',
   '/assets/mark.svg', '/assets/icon-192.png', '/assets/icon-512.png',
 ];
 

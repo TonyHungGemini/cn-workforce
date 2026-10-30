@@ -352,7 +352,28 @@ function resolveScan(raw) {
   if (!worker) return {kind:'unknown',code};
   return {kind:worker.status==='active'?'worker':'archived',code,worker};
 }
-let gateStream=null, gateScanTimer=null, gateDetector=null;
+let gateStream=null, gateScanTimer=null, gateDetector=null, gateCanvas=null;
+const hasBarcodeDetector = () => 'BarcodeDetector' in window;
+const hasJsQr = () => typeof window.jsQR === 'function';
+function qrPayloadFromImageData(imageData) {
+  if (!imageData || !imageData.width || !imageData.height || !hasJsQr()) return '';
+  try { return window.jsQR(imageData.data, imageData.width, imageData.height, {inversionAttempts:'dontInvert'})?.data || ''; } catch { return ''; }
+}
+function qrPayloadFromSource(source) {
+  if (typeof document.createElement !== 'function') return '';
+  const width=source.videoWidth||source.naturalWidth||source.width||0, height=source.videoHeight||source.naturalHeight||source.height||0;
+  if (!width||!height) return '';
+  gateCanvas=gateCanvas||document.createElement('canvas');
+  const scale=Math.min(1,720/Math.max(width,height));
+  gateCanvas.width=Math.round(width*scale);
+  gateCanvas.height=Math.round(height*scale);
+  try {
+    const context=gateCanvas.getContext('2d',{willReadFrequently:true});
+    if (!context) return '';
+    context.drawImage(source,0,0,gateCanvas.width,gateCanvas.height);
+    return qrPayloadFromImageData(context.getImageData(0,0,gateCanvas.width,gateCanvas.height));
+  } catch { return ''; }
+}
 function stopGateCamera(message) {
   if (gateScanTimer) clearInterval(gateScanTimer);
   gateScanTimer=null;
@@ -367,24 +388,32 @@ async function startGateCamera() {
   const status=document.getElementById('gate-scan-status');
   stopGateCamera('Đang mở camera…');
   if (!navigator.mediaDevices?.getUserMedia) { if(status) status.textContent='Trình duyệt không hỗ trợ camera trực tiếp. Hãy nhập mã hoặc chụp ảnh thẻ.'; return; }
-  if (!('BarcodeDetector' in window)) { if(status) status.textContent='Thiết bị chưa hỗ trợ đọc QR trực tiếp. Hãy nhập mã hoặc chụp ảnh thẻ.'; return; }
+  if (!hasBarcodeDetector()&&!hasJsQr()) { if(status) status.textContent='Trình duyệt này không có bộ đọc QR. Hãy nhập mã in trên thẻ.'; return; }
   try {
-    const formats=typeof BarcodeDetector.getSupportedFormats==='function'?await BarcodeDetector.getSupportedFormats():null;
-    if (Array.isArray(formats)&&formats.length&&!formats.includes('qr_code')) { if(status) status.textContent='Thiết bị không có bộ đọc QR. Hãy nhập mã hoặc chụp ảnh thẻ.'; return; }
-    gateDetector=new BarcodeDetector({formats:['qr_code']});
+    // Ask for the camera before any await: iOS drops the tap gesture if the prompt is delayed.
     gateStream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'}},audio:false});
     const video=document.getElementById('gate-video');
     if (!video) { stopGateCamera(); return; }
     video.srcObject=gateStream;
     await video.play().catch(()=>{});
+    gateDetector=null;
+    if (hasBarcodeDetector()) {
+      try {
+        const formats=typeof BarcodeDetector.getSupportedFormats==='function'?await BarcodeDetector.getSupportedFormats():null;
+        if (!Array.isArray(formats)||!formats.length||formats.includes('qr_code')) gateDetector=new BarcodeDetector({formats:['qr_code']});
+      } catch { gateDetector=null; }
+    }
     if (status) status.textContent='Đưa mã QR trên thẻ vào khung hình.';
     gateScanTimer=setInterval(async()=>{
       if (!gateStream||!video.videoWidth) return;
-      try {
-        const codes=await gateDetector.detect(video);
-        if (codes.length) handleGateScan(codes[0].rawValue,'qr');
-      } catch {}
-    },350);
+      let raw='';
+      if (gateDetector) {
+        try { const codes=await gateDetector.detect(video); raw=codes[0]?.rawValue||''; }
+        catch { gateDetector=null; }
+      }
+      if (!raw) raw=qrPayloadFromSource(video);
+      if (raw) handleGateScan(raw,'qr');
+    },450);
   } catch(error) {
     stopGateCamera(error?.name==='NotAllowedError'?'Bạn chưa cho phép camera. Cấp quyền trong cài đặt trình duyệt hoặc nhập mã thủ công.':'Không mở được camera. Kiểm tra quyền truy cập hoặc nhập mã thủ công.');
   }
@@ -397,18 +426,31 @@ function handleGateScan(raw,method='manual') {
   form.elements.code.value=String(raw??'').toUpperCase();
   showGateResult(resolveScan(raw),form.dataset.mode,method);
 }
+function loadGateImage(file) {
+  return new Promise((resolve,reject)=>{
+    if (typeof URL?.createObjectURL!=='function') { reject(new Error('blob')); return; }
+    const url=URL.createObjectURL(file), image=new Image();
+    image.onload=()=>{ URL.revokeObjectURL(url); resolve(image); };
+    image.onerror=()=>{ URL.revokeObjectURL(url); reject(new Error('image')); };
+    image.src=url;
+  });
+}
 async function decodeGatePhoto(input) {
   const file=input.files?.[0], status=document.getElementById('gate-scan-status');
   if (!file) return;
   input.value='';
-  if (!('BarcodeDetector' in window)) { if(status) status.textContent='Thiết bị chưa hỗ trợ đọc QR từ ảnh. Hãy nhập mã thẻ.'; return; }
-  if (!['image/png','image/jpeg','image/webp'].includes(file.type)) { if(status) status.textContent='Chọn ảnh PNG, JPEG hoặc WebP. Ảnh HEIC từ iPhone chưa đọc được.'; return; }
+  if (!hasBarcodeDetector()&&!hasJsQr()) { if(status) status.textContent='Trình duyệt này không đọc được mã QR từ ảnh. Hãy nhập mã in trên thẻ.'; return; }
+  if (!String(file.type||'').startsWith('image/')) { if(status) status.textContent='Chọn tệp ảnh chụp thẻ (JPEG, PNG hoặc WebP).'; return; }
   try {
-    const bitmap=await createImageBitmap(file);
-    const codes=await new BarcodeDetector({formats:['qr_code']}).detect(bitmap);
-    bitmap.close?.();
-    if (!codes.length) { if(status) status.textContent='Không tìm thấy mã QR trong ảnh. Chụp rõ phần mã rồi thử lại.'; return; }
-    handleGateScan(codes[0].rawValue,'qr');
+    const source=typeof createImageBitmap==='function'?await createImageBitmap(file):await loadGateImage(file);
+    let raw='';
+    if (hasBarcodeDetector()) {
+      try { const codes=await new BarcodeDetector({formats:['qr_code']}).detect(source); raw=codes[0]?.rawValue||''; } catch {}
+    }
+    if (!raw) raw=qrPayloadFromSource(source);
+    source.close?.();
+    if (!raw) { if(status) status.textContent='Không tìm thấy mã QR trong ảnh. Chụp rõ phần mã rồi thử lại.'; return; }
+    handleGateScan(raw,'qr');
   } catch { if(status) status.textContent='Không đọc được ảnh này. Thử ảnh khác hoặc nhập mã thẻ.'; }
 }
 function resolveGateForm(form) {
